@@ -1,0 +1,25 @@
+{
+  "name": "email2obsidian",
+  "version": "0.2.0",
+  "description": "Obsidian plugin scaffold for syncing notes and attachments from Email2Obsidian.",
+  "main": "dist/main.js",
+  "repository": "https://email2obsidian.com",
+  "author": "Email2Obsidian",
+  "license": "MIT",
+  "scripts": {
+    "build": "node script/build.js",
+    "dev": "node script/dev.js",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "@types/node": "^20.19.26",
+    "chokidar": "^3.5.3",
+    "esbuild": "^0.17.7",
+    "minimist": "^1.2.8",
+    "obsidian": "^1.1.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.15"
+  }
+}

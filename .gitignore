@@ -1,0 +1,34 @@
+# Build artifacts
+dist/
+*.map
+plan/
+tests/
+vitest.config.ts
+
+# Dependencies
+node_modules/
+
+# Local env/secrets
+.env
+.env.*
+
+# Logs/cache
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log*
+.cache/
+.esbuild/
+
+# Editor/OS cruft
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Test output
+coverage/
+
+# Obsidian vault noise during dev
+.obsidian/
+.trash/

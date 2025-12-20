@@ -1,0 +1,10 @@
+{
+  "id": "email2obsidian",
+  "name": "Email2Obsidian",
+  "version": "0.2.0",
+  "minAppVersion": "0.16.0",
+  "description": "Sync email-derived notes and attachments from Email2Obsidian.com into your vault with full formatting and dedupe.",
+  "author": "Email2Obsidian",
+  "authorUrl": "https://email2obsidian.com",
+  "isDesktopOnly": false
+}
