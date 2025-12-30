@@ -1,3 +1,4 @@
+/* global console */
 import { normalizePath, Notice, Plugin, Vault, TFile } from 'obsidian';
 import { getEmail, listEmails, EmailSummary, ApiError } from './api';
 import {
@@ -7,7 +8,7 @@ import {
   writeFetchLog,
   FetchLogInput,
 } from './fetch-log-store';
-import { renderEmailMarkdown, safeFilename } from './helpers';
+import { renderEmailMarkdown, safeFilename, type FilenameResult } from './helpers';
 import {
   saveAttachments,
   SaveAttachmentsResult,
@@ -138,7 +139,7 @@ export async function runSync(
 
         attachmentErrors.push(...savedAttachments.errors);
 
-        const { filename } = await nameLock(async () => {
+        const filenameResult: FilenameResult = await nameLock(async () => {
           const res = safeFilename(detail.subject, detail.createdAt, existingNames);
           existingNames.add(res.filename);
           return res;
@@ -173,24 +174,24 @@ export async function runSync(
         const markdown = renderResult.markdown;
         attachmentErrors.push(...renderResult.inlineErrors);
 
-        const notePath = joinPosix(noteFolder, filename.filename);
+        const notePath = joinPosix(noteFolder, filenameResult.filename);
         const writeStart = Date.now();
         await writeOrCreateNote(vault, notePath, markdown);
         debugLog(`writeOrCreateNote ${notePath || '(root)'} in ${Date.now() - writeStart}ms`);
 
         successes.push({
           id: detail.id,
-          filename: filename.filename,
+          filename: filenameResult.filename,
         });
-      } catch (error) {
+      } catch (error: unknown) {
         if (error instanceof ApiError && error.code === 'rate-limited') {
           rateLimitedError = error;
           return;
         }
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'Something went wrong syncing an email.';
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'Something went wrong syncing an email.';
         console.warn(`[Email2Obsidian] ${message}`);
         errors.push(message);
         return;
@@ -290,7 +291,6 @@ async function loadExistingNoteNames(
   options: { shallow?: boolean } = {}
 ): Promise<Set<string>> {
   const names = new Set<string>();
-  const shallow = options.shallow !== false;
   try {
     const folder = noteFolder.length ? vault.getFolderByPath(noteFolder) : vault.getRoot();
     if (!folder) {
@@ -303,7 +303,7 @@ async function loadExistingNoteNames(
       // We intentionally skip subfolders to keep scans cheap on large vaults.
       // If recursive scanning is ever needed, it can be added behind the shallow flag.
     }
-  } catch (error) {
+  } catch (error: unknown) {
     // ignore missing folder; it will be created elsewhere
     console.warn(
       `[Email2Obsidian] Unable to list folder ${
@@ -332,7 +332,7 @@ function createDebugLogger(enabled: boolean): (msg: string) => void {
     return () => {};
   }
   return (msg: string) => {
-    console.log(`[Email2Obsidian][debug] ${msg}`);
+    console.debug(`[Email2Obsidian][debug] ${msg}`);
   };
 }
 

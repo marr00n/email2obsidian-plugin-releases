@@ -1,9 +1,10 @@
 # Build artifacts
 dist/
 *.map
-plan/
+Plan/
 tests/
 vitest.config.ts
+eslint.config.mjs
 
 # Dependencies
 node_modules/
@@ -19,6 +20,9 @@ pnpm-debug.log*
 yarn-error.log*
 .cache/
 .esbuild/
+.eslintcache
+tsconfig.eslint.json
+z_errors_to_fix
 
 # Editor/OS cruft
 .DS_Store

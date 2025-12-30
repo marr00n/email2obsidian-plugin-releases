@@ -9,16 +9,20 @@
   "scripts": {
     "build": "node script/build.js",
     "dev": "node script/dev.js",
+    "lint": "eslint .",
     "test": "vitest"
   },
   "dependencies": {
     "@types/node": "^20.19.26",
     "chokidar": "^3.5.3",
-    "esbuild": "^0.17.7",
+    "esbuild": "^0.27.2",
     "minimist": "^1.2.8",
     "obsidian": "^1.1.1"
   },
   "devDependencies": {
+    "@typescript-eslint/parser": "^8.51.0",
+    "eslint": "^9.39.2",
+    "eslint-plugin-obsidianmd": "^0.1.9",
     "typescript": "^5.9.3",
     "vitest": "^4.0.15"
   }

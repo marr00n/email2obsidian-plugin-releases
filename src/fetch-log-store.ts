@@ -1,3 +1,4 @@
+/* global console */
 import { Plugin } from 'obsidian';
 
 export interface FetchLogEntry {
@@ -17,7 +18,7 @@ const FETCH_LOG_KEY = 'fetch-log';
 
 export async function loadFetchLog(plugin: Plugin): Promise<FetchLog> {
   try {
-    const raw = await plugin.loadData();
+    const raw: unknown = await plugin.loadData();
     if (!raw || typeof raw !== 'object') {
       return {};
     }
@@ -53,7 +54,7 @@ export async function writeFetchLog(
   plugin: Plugin,
   log: FetchLog
 ): Promise<void> {
-  const existing = await plugin.loadData();
+  const existing: unknown = await plugin.loadData();
   const payload = {
     ...(existing && typeof existing === 'object' ? existing : {}),
     [FETCH_LOG_KEY]: log,

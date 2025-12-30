@@ -1,5 +1,6 @@
+/* global console */
 import { normalizePath, Vault, TFile } from 'obsidian';
-import { AttachmentMeta, AttachmentDownload, downloadAttachment } from './api';
+import { AttachmentMeta, downloadAttachment } from './api';
 import { basename, extname, joinPosix, isRootPath } from './path-utils';
 
 export interface SaveAttachmentsOptions {

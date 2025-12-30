@@ -1,3 +1,4 @@
+/* global console, window */
 import {
   App,
   ButtonComponent,
@@ -52,36 +53,36 @@ export default class Email2ObsidianPlugin extends Plugin {
 
     this.addCommand({
       id: 'fetch-new',
-      name: 'Fetch New Notes',
-      callback: () => this.handleSync('fetch-new'),
+      name: 'Fetch new notes',
+      callback: () => void this.handleSync('fetch-new'),
     });
 
     this.addCommand({
       id: 'fetch-all',
-      name: 'Fetch All Notes',
-      callback: () => this.handleSync('fetch-all'),
+      name: 'Fetch all notes',
+      callback: () => void this.handleSync('fetch-all'),
     });
 
     if (this.settings.runOnOpen) {
-      this.handleSync('fetch-new');
+      void this.handleSync('fetch-new');
     }
 
     this.setupScheduler(false);
   }
 
   async loadSettings(): Promise<void> {
-    const raw = await this.loadData();
-    const envelope = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+    const raw: unknown = await this.loadData();
+    const envelope = isRecord(raw) ? raw : {};
     const stored =
-      envelope && Object.prototype.hasOwnProperty.call(envelope, 'settings')
-        ? (envelope.settings as unknown)
+      Object.prototype.hasOwnProperty.call(envelope, 'settings')
+        ? envelope.settings
         : raw;
     this.settings = normalizeSettings(stored);
   }
 
   async saveSettings(): Promise<void> {
-    const raw = await this.loadData();
-    const envelope = raw && typeof raw === 'object' ? { ...(raw as Record<string, unknown>) } : {};
+    const raw: unknown = await this.loadData();
+    const envelope = isRecord(raw) ? { ...raw } : {};
     envelope.settings = this.settings;
     await this.saveData(envelope);
   }
@@ -135,7 +136,7 @@ export default class Email2ObsidianPlugin extends Plugin {
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Unknown sync error.';
-      new Notice(`Sync didn\'t finish: ${message}`);
+      new Notice(`Sync didn't finish: ${message}`);
       console.warn('[Email2Obsidian] Sync failed', error);
     } finally {
       this.isSyncing = false;
@@ -158,11 +159,11 @@ export default class Email2ObsidianPlugin extends Plugin {
 
     if (triggerImmediate) {
       this.debugLog('Triggering immediate sync on scheduler start');
-      this.handleSync('fetch-new');
+      void this.handleSync('fetch-new');
     }
 
     this.intervalHandle = window.setInterval(() => {
-      this.handleSync('fetch-new');
+      void this.handleSync('fetch-new');
     }, delay);
     this.debugLog(`Scheduled periodic sync every ${delay}ms`);
   }
@@ -205,7 +206,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
       )
       .addText((text) => {
         text.inputEl.type = 'password';
-        text.setPlaceholder('xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx');
+        text.setPlaceholder('Example: 12345678-1234-1234-1234-123456789abc');
         text.setValue(this.plugin.settings.apiKey);
         text.onChange(async (value) => {
           await this.plugin.updateSettings({ apiKey: value });
@@ -214,7 +215,9 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
       .addButton((button) => {
         button.setButtonText('Test connection');
         button.setTooltip('Test connection to Email2Obsidian');
-        button.onClick(async () => this.testConnection(button));
+        button.onClick(() => {
+          void this.testConnection(button);
+        });
       });
 
     new Setting(containerEl)
@@ -259,9 +262,14 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
           new Notice('No folders available in this vault yet.');
           return;
         }
-        const modal = new FolderSuggestModal(this.app, folders, async (value) => {
-          await this.plugin.updateSettings({ attachmentFolder: value });
-          this.display();
+        const modal = new FolderSuggestModal(this.app, folders, (value) => {
+          void this.plugin
+            .updateSettings({ attachmentFolder: value })
+            .then(() => this.display())
+            .catch((error) => {
+              console.warn('[Email2Obsidian] Failed to update attachment folder', error);
+              new Notice('Failed to update attachment folder.');
+            });
         });
         modal.open();
       });
@@ -280,7 +288,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
     const helper = containerEl.createEl('div');
     helper.addClass('setting-item-description');
     helper.setText(
-      'Inline attachments are embedded in-body; other attachments are listed under “Attachments.” All filenames are collision-safe and folders are auto-created.'
+      'Inline attachments are embedded in body; other attachments are listed under attachments. All filenames are collision-safe and folders are auto-created.'
     );
 
     new Setting(containerEl)
@@ -374,7 +382,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
 
     try {
       await listEmails({ apiKey, sort: 'date-desc' });
-      new Notice('✅ Connected to Email2Obsidian.', 3000);
+      new Notice('Connected to Email2Obsidian.', 3000);
     } catch (error) {
       if (error instanceof ApiError) {
         new Notice(error.message, 5000);
@@ -467,11 +475,15 @@ function normalizeSettings(raw: unknown): Email2ObsidianSettings {
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
 function createDebugLogger(enabled: boolean): (msg: string) => void {
   if (!enabled) {
     return () => {};
   }
-  return (msg: string) => console.log(`[Email2Obsidian][debug] ${msg}`);
+  return (msg: string) => console.debug(`[Email2Obsidian][debug] ${msg}`);
 }
 
 function normalizeFolder(

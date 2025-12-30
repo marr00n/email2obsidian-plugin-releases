@@ -75,7 +75,8 @@ export async function processInlinePlaceholders(
   const inlineMeta: InlineAttachmentContext[] = [];
   const errors: AttachmentSaveError[] = [];
 
-  for (const match of body.matchAll(pattern)) {
+  const matches = Array.from(body.matchAll(pattern)) as RegExpMatchArray[];
+  for (const match of matches) {
     const matchIndex = match.index ?? 0;
     const matchEnd = matchIndex + match[0].length;
     const altRaw = (match[1] ?? '').trim();
@@ -274,8 +275,9 @@ function decodeBase64ToArrayBuffer(data: string): ArrayBuffer {
     throw new Error('Inline data URI is not valid base64');
   }
 
-  if (typeof atob === 'function') {
-    const binary = atob(cleaned);
+  const atobFn = typeof globalThis.atob === 'function' ? globalThis.atob : null;
+  if (atobFn) {
+    const binary = atobFn(cleaned);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i += 1) {
       bytes[i] = binary.charCodeAt(i);
@@ -283,6 +285,11 @@ function decodeBase64ToArrayBuffer(data: string): ArrayBuffer {
     return bytes.buffer;
   }
 
-  const buffer = Buffer.from(cleaned, 'base64');
+  const bufferCtor = typeof globalThis.Buffer === 'function' ? globalThis.Buffer : null;
+  if (!bufferCtor) {
+    throw new Error('Base64 decoding is unavailable in this environment');
+  }
+
+  const buffer = bufferCtor.from(cleaned, 'base64');
   return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
 }

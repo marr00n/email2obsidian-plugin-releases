@@ -1,3 +1,4 @@
+/* global console */
 import { requestUrl, RequestUrlResponse } from 'obsidian';
 
 export const EMAIL2OBSIDIAN_API_BASE = 'https://email2obsidian.com/';
@@ -170,10 +171,13 @@ async function safeFetch(
   return response;
 }
 
-async function parseJson(response: RequestUrlResponse, context: string) {
+async function parseJson(
+  response: RequestUrlResponse,
+  context: string
+): Promise<unknown> {
   try {
     return JSON.parse(response.text);
-  } catch (error) {
+  } catch {
     const message = `${context} returned non-JSON response.`;
     console.warn(`[Email2Obsidian] ${message}`);
     throw new ApiError('bad-response', message, response.status);
@@ -212,7 +216,7 @@ function extractFilenameFromDisposition(disposition: string | null): string | nu
   }
   const value = matches[1];
   if (!value) return null;
-  const trimmed = value.trim().replace(/^\"|\"$/g, '');
+  const trimmed = value.trim().replace(/^"|"$/g, '');
   return trimmed.length ? trimmed : null;
 }
 
