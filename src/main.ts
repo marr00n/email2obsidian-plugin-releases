@@ -189,7 +189,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
 
     const helperTip = containerEl.createEl('div');
     helperTip.addClass('setting-item-description');
-    helperTip.appendText('This plugin works in tandem with the third party service Email2Obsidian. ');
+    helperTip.appendText('This plugin works in tandem with the third party service Email2Obsidian.com. ');
     helperTip.createEl('a', {
       href: 'https://email2obsidian.com',
       text: 'Get started for free.',
@@ -202,7 +202,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName('API key')
       .setDesc(
-        'Paste your Email2Obsidian API key (sent as x-api-key). Keep this secret.'
+        'Paste your Email2Obsidian.com API key. Keep this secret.'
       )
       .addText((text) => {
         text.inputEl.type = 'password';
