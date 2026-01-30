@@ -1,26 +1,26 @@
 # Email2Obsidian Plugin
 
 ## Email anything into Obsidian instantly.
-Send an email and it appears in your Obsidian vault as a fully formed note — subject, body, and attachments included.
+Send an email and it appears in your Obsidian vault as a complete note, including the subject, body, and any attachments.
 
-[Get Started for Free](https://email2obsidian.com/signup) 
+👉 [Get Started for Free](https://email2obsidian.com/signup) 
 
 ## Features
-- Instant capture from any device or email client—no extra apps or automations.
-- Attachments handled automatically (email embeds and email attachments) using Obsidian's attachment settings.
-- Privacy-first: data stored securely for 72 hours, no permanent retention.
-- Never overwrites your notes: new files get a safe, unique name and old ones stay untouched.
+- Capture notes from any device or email client. No extra apps or automations required.
+- Emails and attachments are handled automatically and saved to your chosen folders.
+- Privacy-first design: data is stored securely for up to 72 hours, with no permanent retention.
+- Existing notes are never overwritten. Each new file is given a safe, unique name.
 
 ## How it works
-1) Email your unique address — subject, body, and attachments are captured instantly.  
-2) Service parses and holds your content privately for 72 hours.  
-3) Obsidian plugin fetches and saves notes + attachments using Obsidian's attachment settings.
+1) You get a private email address
+2) Send an email (notes, PDFs, receipts, ideas, files)
+3) Fetch it into Obsidian via the plugin, exactly where you want it
 
 ## Who it’s for
-- Obsidian power users who want fast capture without breaking flow.
-- Knowledge workers and students who email themselves research, ideas, or docs.
-- Document organizers who forward receipts, PDFs, scans straight into their vault.
-
+- Anyone who forwards receipts, PDFs, or scans straight into their vault
+- Knowledge workers and students emailing themselves research, ideas, or documents
+- Obsidian power users who want fast capture without disrupting their workflow
+ 
 ## Plans
 [Get Started for Free](https://email2obsidian.com/signup). [Upgrade when ready](https://email2obsidian.com/pricing)
 
@@ -61,24 +61,26 @@ For one-time installation without auto-updates:
 
 
 ## Setup
-1) Open Settings → Email2Obsidian and configure:
+2) Open Settings → Email2Obsidian and configure:
    - **API Key** (required; sent as `x-api-key`; use “Test connection” to verify)
    - **Notes folder** (optional; leave blank or `.` to write into the vault root; otherwise auto-created with default `E2Oinbox`)
-   - **Periodic sync** + **Interval** (5m/10m/15m/30m/1h/3h/6h/12h/daily); runs immediately when enabled
+   - **Attachment folder** (optional; if set, all attachments/inline references will point here)
+   - **Periodic sync** + **Interval** (1h/3h/6h/12h/daily); runs immediately when enabled
    - **Run on open** (optional one-time sync on app launch; interval countdown restarts on open)
-2) Use the command palette:
-   - **Fetch New Email2Obsidian Notes** (log-aware, appends to log)
-   - **Fetch All Email2Obsidian Notes** (ignores log for selection, rewrites log to fetched set)
+3) Use the command palette:
+   - **Fetch New Email2Obsidian Notes** - fetches unseen emails and appends to the sync log
+   - **Fetch All Email2Obsidian Notes** - ignores the log and refetches all emails on server
 
 ---
 
 ## Behaviour Notes
-- Fetches each email only once and saves files with safe, unique names (adds -1, -2 if needed).
-- Attachments follow Obsidian's attachment settings.
+- Each email is only fetched once.
+- Notes are saved with safe, unique filenames (e.g. -1, -2 added if required).
+- Attachments saved to the attachment folder if set; otherwise beside the note.
 
 ## Disclosures
-- Requires an Email2Obsidian account and API key; depends on the Email2Obsidian service.
-- Plugin stores sync state/settings locally under `.obsidian/plugins/email2obsidian/`; notes and attachments are written to your vault per your Obsidian settings.
+- Requires an Email2Obsidian account and API key.
+- Plugin stores sync state/settings locally under `.obsidian/plugins/email2obsidian/`.
 - No telemetry or analytics beyond the network requests needed to sync.
 
 ## Development
