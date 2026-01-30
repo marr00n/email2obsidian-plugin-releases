@@ -1,13 +1,13 @@
 /* global console */
-import { normalizePath, Vault, TFile } from 'obsidian';
+import { Vault, TFile, FileManager, normalizePath } from 'obsidian';
 import { AttachmentMeta, downloadAttachment } from './api';
-import { basename, extname, joinPosix, isRootPath } from './path-utils';
+import { basename, extname, isRootPath } from './path-utils';
 
 export interface SaveAttachmentsOptions {
   vault: Vault;
+  fileManager: FileManager;
   apiKey: string;
-  noteFolder: string;
-  attachmentFolder?: string | null;
+  sourcePath: string;
   attachments: AttachmentMeta[];
   logger?: (msg: string) => void;
   downloader?: typeof downloadAttachment;
@@ -15,7 +15,7 @@ export interface SaveAttachmentsOptions {
 
 export interface SaveAttachmentsResult {
   errors: AttachmentSaveError[];
-  savedNameById: Record<number, string>;
+  savedPathById: Record<number, string>;
 }
 
 export type AttachmentSaveContext = AttachmentMeta | InlineAttachmentContext;
@@ -31,11 +31,6 @@ export interface InlineAttachmentContext {
   mimeType?: string | null;
   dataUriSnippet?: string;
   altText?: string | null;
-}
-
-export interface AttachmentTarget {
-  noteFolderPath: string;
-  attachmentTargetPath: string;
 }
 
 const MIME_EXTENSION_MAP: Record<string, string> = {
@@ -73,35 +68,6 @@ export function buildAttachmentBase(opts: {
   return `${fallback}${mimeExt}`;
 }
 
-export async function resolveAttachmentTarget(opts: {
-  vault: Vault;
-  noteFolder: string;
-  attachmentFolder?: string | null;
-}): Promise<AttachmentTarget> {
-  const { vault, noteFolder, attachmentFolder } = opts;
-
-  const noteFolderIsRoot = isRootPath(noteFolder);
-  const noteFolderPath = noteFolderIsRoot ? '' : normalizePath(noteFolder);
-
-  const hasAttachmentFolder =
-    typeof attachmentFolder === 'string' && !isRootPath(attachmentFolder);
-  const resolvedAttachment = hasAttachmentFolder && attachmentFolder
-    ? normalizePath(attachmentFolder)
-    : noteFolderPath;
-
-  if (!noteFolderIsRoot) {
-    await ensureFolder(vault, noteFolderPath);
-  }
-  if (resolvedAttachment && resolvedAttachment !== noteFolderPath) {
-    await ensureFolder(vault, resolvedAttachment);
-  }
-
-  return {
-    noteFolderPath,
-    attachmentTargetPath: resolvedAttachment,
-  };
-}
-
 export function getExtensionForMime(mime?: string | null): string {
   if (!mime || typeof mime !== 'string') {
     return '.bin';
@@ -128,23 +94,26 @@ export function toAttachmentSaveError(
 
 export async function saveBinaryData(opts: {
   vault: Vault;
+  fileManager: FileManager;
   data: ArrayBuffer;
   suggestedName: string;
-  targetFolder: string;
+  sourcePath: string;
   mimeType?: string | null;
 }): Promise<{ filename: string; path: string }> {
-  const { vault, data, suggestedName, targetFolder, mimeType } = opts;
+  const { vault, fileManager, data, suggestedName, sourcePath, mimeType } = opts;
 
   const sanitized = sanitizeAttachmentName(suggestedName);
   const providedExt = extname(sanitized);
   const extension = providedExt || getExtensionForMime(mimeType);
   const base = basename(sanitized, providedExt);
 
-  const filename = await uniqueFilename(vault, targetFolder, `${base}${extension}`);
-  const path = joinPosix(targetFolder, filename);
+  const path = await fileManager.getAvailablePathForAttachment(
+    `${base}${extension}`,
+    sourcePath
+  );
   await writeBinaryFile(vault, path, data);
 
-  return { filename, path };
+  return { filename: basename(path), path };
 }
 
 /**
@@ -156,26 +125,20 @@ export async function saveAttachments(
 ): Promise<SaveAttachmentsResult> {
   const {
     vault,
+    fileManager,
     apiKey,
     attachments,
-    noteFolder,
-    attachmentFolder,
+    sourcePath,
     logger = console.warn,
     downloader = downloadAttachment,
   } = opts;
-
-  const { attachmentTargetPath } = await resolveAttachmentTarget({
-    vault,
-    noteFolder,
-    attachmentFolder,
-  });
 
   const nonInline = attachments.filter(
     (att) => att.contentDisposition !== 'inline'
   );
 
   const errors: AttachmentSaveError[] = [];
-  const savedNameById: Record<number, string> = {};
+  const savedPathById: Record<number, string> = {};
 
   const downloads = await runWithConcurrency(
     nonInline,
@@ -210,10 +173,11 @@ export async function saveAttachments(
         vault,
         data: downloaded.data,
         suggestedName: baseName,
-        targetFolder: attachmentTargetPath,
+        fileManager,
+        sourcePath,
         mimeType: downloaded.mimeType,
       });
-      savedNameById[att.id] = saved.filename;
+      savedPathById[att.id] = saved.path;
     } catch (error) {
       const errObj = toAttachmentSaveError(att, error);
       logger(`[Email2Obsidian] Attachment ${att.id}: ${errObj.message}`);
@@ -221,7 +185,7 @@ export async function saveAttachments(
     }
   }
 
-  return { errors, savedNameById };
+  return { errors, savedPathById };
 }
 
 export async function ensureFolder(vault: Vault, folder: string): Promise<void> {
@@ -252,24 +216,6 @@ function sanitizeAttachmentName(name: string, id?: number): string {
   return `${base}${ext}`;
 }
 
-async function uniqueFilename(
-  vault: Vault,
-  folder: string,
-  filename: string
-): Promise<string> {
-  const ext = extname(filename);
-  const base = basename(filename, ext);
-
-  let candidate = filename;
-  let suffix = 1;
-  while (fileExists(vault, joinPosix(folder, candidate))) {
-    candidate = `${base}-${suffix}${ext}`;
-    suffix += 1;
-  }
-
-  return candidate;
-}
-
 async function writeBinaryFile(
   vault: Vault,
   filePath: string,
@@ -281,11 +227,6 @@ async function writeBinaryFile(
     return;
   }
   await vault.createBinary(filePath, data);
-}
-
-function fileExists(vault: Vault, filePath: string): boolean {
-  const abstract = vault.getAbstractFileByPath(filePath);
-  return Boolean(abstract);
 }
 
 async function runWithConcurrency<T, R>(

@@ -12,7 +12,6 @@ export interface InlinePlaceholderResult {
 export type InlineBinarySaver = (opts: {
   data: ArrayBuffer;
   suggestedName: string;
-  targetFolder: string;
   mimeType?: string | null;
 }) => Promise<{ filename: string; path: string }>;
 
@@ -44,7 +43,6 @@ export function safeFilename(
 
 export interface RenderPaths {
   noteFolder: string;
-  attachmentFolder?: string | null;
 }
 
 export interface RenderedMarkdown {
@@ -54,14 +52,12 @@ export interface RenderedMarkdown {
 }
 
 export interface RenderMarkdownOptions {
-  savedNames?: Record<number, string>;
-  targetFolder: string;
+  savedPaths?: Record<number, string>;
   inlineSaver: InlineBinarySaver;
 }
 
 export async function processInlinePlaceholders(
   email: EmailDetail,
-  targetFolder: string,
   saveBinary: InlineBinarySaver
 ): Promise<InlinePlaceholderResult> {
   const body = email.markdownBody ?? '';
@@ -126,13 +122,11 @@ export async function processInlinePlaceholders(
       const saved = await saveBinary({
         data: binary,
         suggestedName: baseName,
-        targetFolder,
         mimeType: parsed.mimeType,
       });
 
-      inlineEmbeds[placeholderIndex] = saved.filename;
-      const linkPath = buildAttachmentLink(targetFolder, saved.filename);
-      output += `![[${linkPath}]]`;
+      inlineEmbeds[placeholderIndex] = saved.path;
+      output += `![[${normalizeLinkPath(saved.path)}]]`;
     } catch (error) {
       errors.push(toAttachmentSaveError(context, error));
       output += match[0];
@@ -166,7 +160,7 @@ export async function renderEmailMarkdown(
     '---',
   ].join('\n');
 
-  const targetFolder = options.targetFolder ?? paths.attachmentFolder ?? paths.noteFolder;
+  const fallbackFolder = paths.noteFolder;
 
   const shouldProcessInline =
     typeof email.markdownBody === 'string' &&
@@ -174,7 +168,7 @@ export async function renderEmailMarkdown(
     email.markdownBody.includes('![');
 
   const inlineResult = shouldProcessInline
-    ? await processInlinePlaceholders(email, targetFolder, options.inlineSaver)
+    ? await processInlinePlaceholders(email, options.inlineSaver)
     : {
         body: email.markdownBody ?? '',
         inlineEmbeds: {},
@@ -187,7 +181,7 @@ export async function renderEmailMarkdown(
   );
 
   const attachmentSection = nonInline.length
-    ? buildAttachmentSection(nonInline, targetFolder, options.savedNames)
+    ? buildAttachmentSection(nonInline, options.savedPaths, fallbackFolder)
     : '';
 
   const markdown = [frontmatter, '', inlineResult.body.trimEnd(), attachmentSection]
@@ -215,13 +209,17 @@ function escapeFrontmatter(input: string): string {
 
 function buildAttachmentSection(
   attachments: AttachmentMeta[],
-  folder: string,
-  savedNames?: Record<number, string>
+  savedPaths: Record<number, string> | undefined,
+  fallbackFolder: string
 ): string {
   const lines = ['## Attachments', ''];
   for (const att of attachments) {
-    const filename = savedNames?.[att.id] ?? att.fileName;
-    const linkPath = buildAttachmentLink(folder, filename);
+    const savedPath = savedPaths?.[att.id];
+    if (savedPath) {
+      lines.push(`- [${att.fileName}](${normalizeLinkPath(savedPath)})`);
+      continue;
+    }
+    const linkPath = buildAttachmentLink(fallbackFolder, att.fileName);
     lines.push(`- [${att.fileName}](${linkPath})`);
   }
   return lines.join('\n');
@@ -230,6 +228,10 @@ function buildAttachmentSection(
 function buildAttachmentLink(folder: string, filename: string): string {
   const cleanFolder = folder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
   return cleanFolder ? `${cleanFolder}/${filename}` : filename;
+}
+
+function normalizeLinkPath(path: string): string {
+  return path.replace(/\\/g, '/').replace(/^\/+/, '');
 }
 
 function parseDataUri(

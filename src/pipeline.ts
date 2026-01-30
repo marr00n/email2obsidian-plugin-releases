@@ -15,13 +15,11 @@ import {
   ensureFolder,
   AttachmentSaveError,
   saveBinaryData,
-  resolveAttachmentTarget,
 } from './attachments';
 import { joinPosix, isRootPath } from './path-utils';
 export interface PipelineSettings {
   apiKey: string;
   notesFolder: string;
-  attachmentFolder: string | null;
   debugLogging?: boolean;
 }
 
@@ -56,15 +54,8 @@ export async function runSync(
   const rawNoteFolder = settings.notesFolder ?? '';
   const noteFolderIsRoot = isRootPath(rawNoteFolder);
   const noteFolder = noteFolderIsRoot ? '' : normalizePath(rawNoteFolder);
-  const attachmentFolder = settings.attachmentFolder
-    ? normalizePath(settings.attachmentFolder)
-    : null;
-
   if (!noteFolderIsRoot) {
     await ensureFolder(vault, noteFolder);
-  }
-  if (attachmentFolder && attachmentFolder !== noteFolder) {
-    await ensureFolder(vault, attachmentFolder);
   }
 
   const existingScanStart = Date.now();
@@ -110,57 +101,46 @@ export async function runSync(
           })`
         );
 
-        const targetStart = Date.now();
-        const target = await resolveAttachmentTarget({
-          vault,
-          noteFolder,
-          attachmentFolder,
-        });
-        debugLog(
-          `resolveAttachmentTarget note=${target.noteFolderPath || '(root)'} attachment=${
-            target.attachmentTargetPath || '(root)'
-          } in ${Date.now() - targetStart}ms`
-        );
-
-        const saveStart = Date.now();
-        const savedAttachments: SaveAttachmentsResult = await saveAttachments({
-          vault,
-          apiKey,
-          attachments: detail.attachments || [],
-          noteFolder: target.noteFolderPath,
-          attachmentFolder: target.attachmentTargetPath,
-          logger: (msg) => console.warn(msg),
-        });
-        debugLog(
-          `saveAttachments for email ${detail.id} completed in ${Date.now() - saveStart}ms; saved ${
-            Object.keys(savedAttachments.savedNameById).length
-          } attachments`
-        );
-
-        attachmentErrors.push(...savedAttachments.errors);
-
         const filenameResult: FilenameResult = await nameLock(async () => {
           const res = safeFilename(detail.subject, detail.createdAt, existingNames);
           existingNames.add(res.filename);
           return res;
         });
 
+        const notePath = joinPosix(noteFolder, filenameResult.filename);
+
+        const saveStart = Date.now();
+        const savedAttachments: SaveAttachmentsResult = await saveAttachments({
+          vault,
+          fileManager: plugin.app.fileManager,
+          apiKey,
+          attachments: detail.attachments || [],
+          sourcePath: notePath,
+          logger: (msg) => console.warn(msg),
+        });
+        debugLog(
+          `saveAttachments for email ${detail.id} completed in ${Date.now() - saveStart}ms; saved ${
+            Object.keys(savedAttachments.savedPathById).length
+          } attachments`
+        );
+
+        attachmentErrors.push(...savedAttachments.errors);
+
         const renderStart = Date.now();
         const renderResult = await renderEmailMarkdown(
           detail,
           {
-            noteFolder: target.noteFolderPath,
-            attachmentFolder: target.attachmentTargetPath,
+            noteFolder,
           },
           {
-            savedNames: savedAttachments.savedNameById,
-            targetFolder: target.attachmentTargetPath,
+            savedPaths: savedAttachments.savedPathById,
             inlineSaver: (opts) =>
               saveBinaryData({
                 vault,
+                fileManager: plugin.app.fileManager,
                 data: opts.data,
                 suggestedName: opts.suggestedName,
-                targetFolder: opts.targetFolder,
+                sourcePath: notePath,
                 mimeType: opts.mimeType,
               }),
           }
@@ -174,7 +154,6 @@ export async function runSync(
         const markdown = renderResult.markdown;
         attachmentErrors.push(...renderResult.inlineErrors);
 
-        const notePath = joinPosix(noteFolder, filenameResult.filename);
         const writeStart = Date.now();
         await writeOrCreateNote(vault, notePath, markdown);
         debugLog(`writeOrCreateNote ${notePath || '(root)'} in ${Date.now() - writeStart}ms`);

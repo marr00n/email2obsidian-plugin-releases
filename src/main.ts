@@ -6,19 +6,25 @@ import {
   Plugin,
   PluginSettingTab,
   Setting,
-  SuggestModal,
-  TFolder,
   normalizePath,
 } from 'obsidian';
 import { ApiError, listEmails } from './api';
 import { runSync, SyncMode } from './pipeline';
 
-export type SyncInterval = '1h' | '3h' | '6h' | '12h' | 'daily';
+export type SyncInterval =
+  | '5m'
+  | '10m'
+  | '15m'
+  | '30m'
+  | '1h'
+  | '3h'
+  | '6h'
+  | '12h'
+  | 'daily';
 
 export interface Email2ObsidianSettings {
   apiKey: string;
   notesFolder: string;
-  attachmentFolder: string | null;
   periodicSync: boolean;
   syncInterval: SyncInterval;
   runOnOpen: boolean;
@@ -26,12 +32,21 @@ export interface Email2ObsidianSettings {
   debugLogging: boolean;
 }
 
-const SYNC_INTERVALS: SyncInterval[] = ['1h', '3h', '6h', '12h', 'daily'];
+const SYNC_INTERVALS: SyncInterval[] = [
+  '5m',
+  '10m',
+  '15m',
+  '30m',
+  '1h',
+  '3h',
+  '6h',
+  '12h',
+  'daily',
+];
 
 const DEFAULT_SETTINGS: Email2ObsidianSettings = {
   apiKey: '',
   notesFolder: 'E2Oinbox',
-  attachmentFolder: null,
   periodicSync: false,
   syncInterval: 'daily',
   runOnOpen: false,
@@ -233,62 +248,10 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
         });
       });
 
-    const attachmentSetting = new Setting(containerEl)
-      .setName('Attachment folder (optional)')
-      .setDesc(
-        'Store attachments separately; inline and non-inline references will point here. Leave blank to save attachments beside each note.'
-      );
-
-    const folder = this.plugin.settings.attachmentFolder;
-    const desc = attachmentSetting.descEl.createDiv({ cls: 'setting-item-description' });
-    desc.createSpan({ text: 'Current: ' });
-
-    const currentLabel = folder
-      ? desc.createSpan({ text: `/${folder}` })
-      : desc.createSpan({ text: 'Beside each note (default)' });
-
-    currentLabel.addClass('email2obsidian-attachment-label');
-
-    attachmentSetting.addButton((button) => {
-      button.setButtonText(
-        this.plugin.settings.attachmentFolder
-          ? 'Change folder'
-          : 'Choose folder'
-      );
-      button.setTooltip('Select from existing vault folders');
-      button.onClick(() => {
-        const folders = getVaultFolders(this.app);
-        if (!folders.length) {
-          new Notice('No folders available in this vault yet.');
-          return;
-        }
-        const modal = new FolderSuggestModal(this.app, folders, (value) => {
-          void this.plugin
-            .updateSettings({ attachmentFolder: value })
-            .then(() => this.display())
-            .catch((error) => {
-              console.warn('[Email2Obsidian] Failed to update attachment folder', error);
-              new Notice('Failed to update attachment folder.');
-            });
-        });
-        modal.open();
-      });
-    });
-
-    attachmentSetting.addExtraButton((button) => {
-      button.setIcon('x-circle');
-      button.setTooltip('Save attachments beside each note');
-      button.setDisabled(!this.plugin.settings.attachmentFolder);
-      button.onClick(async () => {
-        await this.plugin.updateSettings({ attachmentFolder: null });
-        this.display();
-      });
-    });
-
     const helper = containerEl.createEl('div');
     helper.addClass('setting-item-description');
     helper.setText(
-      'Inline attachments are embedded in body; other attachments are listed under attachments. All filenames are collision-safe and folders are auto-created.'
+      "Inline attachments are embedded in body; other attachments are listed under attachments. Attachment locations follow Obsidian's attachment settings."
     );
 
     new Setting(containerEl)
@@ -322,10 +285,14 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Sync interval')
-      .setDesc('Interval for periodic syncs (1h, 3h, 6h, 12h, daily).')
+      .setDesc('Interval for periodic syncs (5m, 10m, 15m, 30m, 1h, 3h, 6h, 12h, daily).')
       .addDropdown((dropdown) => {
         dropdown
           .addOptions({
+            '5m': 'Every 5 minutes',
+            '10m': 'Every 10 minutes',
+            '15m': 'Every 15 minutes',
+            '30m': 'Every 30 minutes',
             '1h': 'Every hour',
             '3h': 'Every 3 hours',
             '6h': 'Every 6 hours',
@@ -399,56 +366,6 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
   }
 }
 
-class FolderSuggestModal extends SuggestModal<string> {
-  private readonly folders: string[];
-  private readonly onSelect: (value: string) => void;
-
-  constructor(app: App, folderPaths: string[], onSelect: (value: string) => void) {
-    super(app);
-    this.folders = folderPaths;
-    this.onSelect = onSelect;
-    this.setPlaceholder('Filter folders…');
-  }
-
-  getSuggestions(query: string): string[] {
-    const normalized = query.trim().toLowerCase();
-    if (!normalized.length) {
-      return this.folders;
-    }
-    return this.folders.filter((folder) =>
-      folder.toLowerCase().includes(normalized)
-    );
-  }
-
-  renderSuggestion(folder: string, el: HTMLElement) {
-    el.createEl('div', { text: folder });
-  }
-
-  onChooseSuggestion(folder: string) {
-    this.onSelect(folder);
-  }
-}
-
-function getVaultFolders(app: App): string[] {
-  const folders: string[] = [];
-  const root = app.vault.getRoot();
-
-  const visit = (folder: TFolder) => {
-    if (folder.path && folder.path.length > 0) {
-      folders.push(folder.path);
-    }
-    for (const child of folder.children) {
-      if (child instanceof TFolder) {
-        visit(child);
-      }
-    }
-  };
-
-  visit(root);
-  folders.sort((a, b) => a.localeCompare(b));
-  return folders;
-}
-
 function normalizeSettings(raw: unknown): Email2ObsidianSettings {
   const candidate =
     raw && typeof raw === 'object'
@@ -457,13 +374,11 @@ function normalizeSettings(raw: unknown): Email2ObsidianSettings {
   const merged = { ...DEFAULT_SETTINGS, ...candidate };
 
   const notesFolder = normalizeFolder(merged.notesFolder, { allowRoot: true });
-  const attachmentFolder = normalizeFolder(merged.attachmentFolder);
   const syncInterval = normalizeSyncInterval(merged.syncInterval);
 
   return {
     apiKey: typeof merged.apiKey === 'string' ? merged.apiKey.trim() : '',
     notesFolder: notesFolder ?? DEFAULT_SETTINGS.notesFolder,
-    attachmentFolder: attachmentFolder ?? null,
     periodicSync: Boolean(merged.periodicSync),
     syncInterval,
     runOnOpen: Boolean(merged.runOnOpen),
@@ -515,6 +430,14 @@ function normalizeSyncInterval(value: unknown): SyncInterval {
 
 function syncIntervalToMs(interval: SyncInterval): number {
   switch (interval) {
+    case '5m':
+      return 5 * 60 * 1000;
+    case '10m':
+      return 10 * 60 * 1000;
+    case '15m':
+      return 15 * 60 * 1000;
+    case '30m':
+      return 30 * 60 * 1000;
     case '1h':
       return 60 * 60 * 1000;
     case '3h':
