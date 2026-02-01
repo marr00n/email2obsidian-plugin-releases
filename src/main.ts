@@ -237,9 +237,13 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Notes destination folder')
-      .setDesc(
-        'Destination folder for notes. Folder created automatically if missing.'
-      )
+      .setDesc((desc) => {
+        desc.appendText('Destination folder for notes. Folder created automatically if missing.');
+        desc.createEl('br');
+        desc.appendText(
+          "Email attachments follow global settings. These can be adjusted from Obsidian's Files and Links settings. "
+        );
+      })
       .addText((text) => {
         text.setPlaceholder('(blank for root)');
         text.setValue(this.plugin.settings.notesFolder);
@@ -248,33 +252,14 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
         });
       });
 
-    const helper = containerEl.createEl('div');
-    helper.addClass('setting-item-description');
-    helper.setText(
-      "Inline attachments are embedded in body; other attachments are listed under attachments. Attachment locations follow Obsidian's attachment settings."
-    );
-
-    new Setting(containerEl)
-      .setName('Sync on open')
-      .setDesc(
-        'If enabled, syncs when Obsidian launches. Periodic sync countdown also restarts on each open.'
-      )
-      .addToggle((toggle) => {
-        toggle.setValue(this.plugin.settings.runOnOpen);
-        toggle.onChange(async (value) => {
-          await this.plugin.updateSettings({ runOnOpen: value });
-        });
-      });
-
-
     new Setting(containerEl)
       .setHeading()
-      .setName('Sync');
+      .setName('Fetch Notes Automatically');
 
     new Setting(containerEl)
-      .setName('Background sync')
+      .setName('Background fetch')
       .setDesc(
-        'Enable background syncing at your chosen interval. When enabled, a sync runs immediately once.'
+        'Enable background fetching at your chosen interval. When enabled, a sync runs immediately once.'
       )
       .addToggle((toggle) => {
         toggle.setValue(this.plugin.settings.periodicSync);
@@ -284,7 +269,19 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
-      .setName('Sync interval')
+      .setName('Fetch notes on open')
+      .setDesc(
+        'If enabled, execute fetching of new notes when Obsidian launches.'
+      )
+      .addToggle((toggle) => {
+        toggle.setValue(this.plugin.settings.runOnOpen);
+        toggle.onChange(async (value) => {
+          await this.plugin.updateSettings({ runOnOpen: value });
+        });
+      });
+
+    new Setting(containerEl)
+      .setName('Fetch interval')
       .setDesc('How frequently would you like to check for new notes? (Only if Background Sync is enabled.)')
       .addDropdown((dropdown) => {
         dropdown
@@ -308,7 +305,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
-      .setName('Last sync run')
+      .setName('Last fetched')
       .setDesc(
         this.plugin.settings.lastRunAt
           ? this.plugin.settings.lastRunAt
@@ -316,6 +313,24 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
       )
       .setDisabled(true);
 
+    new Setting(containerEl)
+      .setHeading()
+      .setName('Tips');
+
+    new Setting(containerEl).setDesc((desc) => {
+      desc.createEl('p', {
+        text: 'Currently, only emails received from your registered email address will be processed.',
+      });
+      desc.createEl('p', {
+        text: 'Tags are supported; both in the subject line and the note body. Tags in the email subject are added to the frontmatter, tags within the email body are not.',
+      });
+      const linkLine = desc.createEl('p');
+      linkLine.createEl('a', {
+        href: 'https://email2obsidian.com/dashboard',
+        text: 'Click here',
+      });
+      linkLine.appendText(' to open your account settings.');
+    });
 
     new Setting(containerEl)
       .setHeading()

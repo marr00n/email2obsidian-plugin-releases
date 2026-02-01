@@ -213,7 +213,7 @@ function buildAttachmentSection(
   savedPaths: Record<number, string> | undefined,
   fallbackFolder: string
 ): string {
-  const lines = ['## Attachments', ''];
+  const lines = ['## Email Attachments', ''];
   for (const att of attachments) {
     const savedPath = savedPaths?.[att.id];
     if (savedPath) {
