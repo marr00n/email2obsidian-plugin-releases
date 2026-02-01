@@ -238,7 +238,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName('Notes destination folder')
       .setDesc(
-        'Destination folder for notes. Leave blank or "." to save directly into the vault root. Created automatically if missing.'
+        'Destination folder for notes. Folder created automatically if missing.'
       )
       .addText((text) => {
         text.setPlaceholder('(blank for root)');
@@ -272,9 +272,9 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
       .setName('Sync');
 
     new Setting(containerEl)
-      .setName('Periodic sync')
+      .setName('Background sync')
       .setDesc(
-        'Enable background syncing at a fixed interval. When enabled, a sync runs immediately once.'
+        'Enable background syncing at your chosen interval. When enabled, a sync runs immediately once.'
       )
       .addToggle((toggle) => {
         toggle.setValue(this.plugin.settings.periodicSync);
@@ -285,7 +285,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Sync interval')
-      .setDesc('Interval for periodic syncs (5m, 10m, 15m, 30m, 1h, 3h, 6h, 12h, daily).')
+      .setDesc('How frequently would you like to check for new notes? (Only if Background Sync is enabled.)')
       .addDropdown((dropdown) => {
         dropdown
           .addOptions({

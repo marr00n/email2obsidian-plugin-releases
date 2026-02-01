@@ -197,7 +197,8 @@ export async function renderEmailMarkdown(
 
 function sanitizeFilename(input: string): string {
   const cleaned = input
-    .replace(/[\\/:*?"<>|]+/g, ' ')
+    .replace(/[\\/*?"<>|]+/g, ' ')
+    .replace(/:/g, '-')
     .replace(/\s+/g, ' ')
     .trim();
   return cleaned.length ? cleaned : 'email';
