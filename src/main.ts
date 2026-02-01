@@ -1,4 +1,4 @@
-/* global console, window */
+/* global console, window, document */
 import {
   App,
   ButtonComponent,
