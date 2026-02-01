@@ -235,15 +235,18 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
         });
       });
 
+    const notesFolderDesc = document.createDocumentFragment();
+    notesFolderDesc.append(
+      'Destination folder for notes. Folder created automatically if missing.'
+    );
+    notesFolderDesc.appendChild(document.createElement('br'));
+    notesFolderDesc.append(
+      "Email attachments follow global settings. These can be adjusted from Obsidian's Files and Links settings."
+    );
+
     new Setting(containerEl)
       .setName('Notes destination folder')
-      .setDesc((desc) => {
-        desc.appendText('Destination folder for notes. Folder created automatically if missing.');
-        desc.createEl('br');
-        desc.appendText(
-          "Email attachments follow global settings. These can be adjusted from Obsidian's Files and Links settings. "
-        );
-      })
+      .setDesc(notesFolderDesc)
       .addText((text) => {
         text.setPlaceholder('(blank for root)');
         text.setValue(this.plugin.settings.notesFolder);
@@ -317,20 +320,26 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
       .setHeading()
       .setName('Tips');
 
-    new Setting(containerEl).setDesc((desc) => {
-      desc.createEl('p', {
-        text: 'Currently, only emails received from your registered email address will be processed.',
-      });
-      desc.createEl('p', {
-        text: 'Tags are supported; both in the subject line and the note body. Tags in the email subject are added to the frontmatter, tags within the email body are not.',
-      });
-      const linkLine = desc.createEl('p');
-      linkLine.createEl('a', {
-        href: 'https://email2obsidian.com/dashboard',
-        text: 'Click here',
-      });
-      linkLine.appendText(' to open your account settings.');
-    });
+    const tipsDesc = document.createDocumentFragment();
+    const tipsLine1 = document.createElement('p');
+    tipsLine1.textContent =
+      'Currently, only emails received from your registered email address will be processed.';
+    tipsDesc.appendChild(tipsLine1);
+
+    const tipsLine2 = document.createElement('p');
+    tipsLine2.textContent =
+      'Tags are supported; both in the subject line and the note body. Tags in the email subject are added to the frontmatter, tags within the email body are not.';
+    tipsDesc.appendChild(tipsLine2);
+
+    const tipsLine3 = document.createElement('p');
+    const tipsLink = document.createElement('a');
+    tipsLink.href = 'https://email2obsidian.com/dashboard';
+    tipsLink.textContent = 'Click here';
+    tipsLine3.appendChild(tipsLink);
+    tipsLine3.append(' to open your account settings.');
+    tipsDesc.appendChild(tipsLine3);
+
+    new Setting(containerEl).setDesc(tipsDesc);
 
     new Setting(containerEl)
       .setHeading()
