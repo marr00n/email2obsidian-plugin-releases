@@ -1,4 +1,4 @@
-# Email2Obsidian Plugin
+# Send Email into Vault by Email2Obsidian
 
 ## Email anything into Obsidian instantly.
 Send an email and it appears in your Obsidian vault as a complete note, including the subject, body, and any attachments.
