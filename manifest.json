@@ -1,5 +1,5 @@
 {
-  "id": "email-to-vault",
+  "id": "send-email-into-vault",
   "name": "Email2Obsidian",
   "version": "0.2.1",
   "minAppVersion": "0.16.0",
