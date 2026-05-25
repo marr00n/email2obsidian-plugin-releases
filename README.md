@@ -1,63 +1,38 @@
 # Send Email into Vault by Email2Obsidian
 
 ## Email anything into Obsidian instantly.
+
+## Send Email into Vault by Email2Obsidian
 Send an email and it appears in your Obsidian vault as a complete note, including the subject, body, and any attachments.
 
 👉 [Get Started for Free](https://email2obsidian.com/signup) 
 
 ## Features
-- Capture notes from any device or email client. No extra apps or automations required.
-- Emails and attachments are handled automatically and saved to your chosen folders.
-- Privacy-first design: data is stored securely for up to 72 hours, with no permanent retention.
-- Existing notes are never overwritten. Each new file is given a safe, unique name.
+- **Works on desktop and mobile** — access your ingestion address from any device
+- **Flexible sync** — trigger manually, on a schedule, or automatically when your vault opens
+- **Safe file handling** — new notes never overwrite existing files in your vault
+- **Configurable attachment storage** — choose where attachments are saved within your vault
+- **Multiple vault support** — route emails to different vaults *(coming soon)*
+- **Strong privacy** — emails are automatically deleted after 72 hours and are never sold, shared, or used for AI training; no vault telemetry
 
 ## How it works
 1) You get a private email address
 2) Send an email (notes, PDFs, receipts, ideas, files)
-3) Fetch it into Obsidian via the plugin, exactly where you want it
+3) Fetch it into Obsidian via the plugin, exactly where you want it, automatically
 
 ## Who it’s for
 - Anyone who forwards receipts, PDFs, or scans straight into their vault
 - Knowledge workers and students emailing themselves research, ideas, or documents
 - Obsidian power users who want fast capture without disrupting their workflow
  
-## Plans
+## Paid Plans
 [Get Started for Free](https://email2obsidian.com/signup). [Upgrade when ready](https://email2obsidian.com/pricing)
 
 ---
 ## Installation
 
-### Option 1: **Install via Community Plug-ins**  
-- Currently under review, awaiting approval for listing.
-
-### Option 2: **BRAT Plugin (Recommended - Auto Updates)**  
-Using BRAT (Beta Reviewers Auto-update Tool) allows you to receive automatic updates:
-
-1. **Install BRAT** (if not already installed)
-   - Open **Settings** → **Community Plugins** → **Browse**
-   - Search for "BRAT"
-   - Install and enable it
-
-2. **Add Email2Obsidian via BRAT**
-   - Open **Settings** → **BRAT**
-   - Click **Add Beta Plugin**
-   - Enter repository: `https://github.com/marr00n/email2obsidian-plugin-releases`
-   - Click **Add Plugin**
-   - Enable the plugin
-
-3. **Enable the plugin**
-   - Go to **Settings** → **Community Plugins**
-   - Find "Email2Obsidian" and enable it  
-   BRAT will automatically check for and install updates from new releases.
-
-### Option 3: **Manual Download**  
-For one-time installation without auto-updates:
-
-1. Download the latest release from [**GitHub Releases**](https://github.com/marr00n/email2obsidian-plugin-releases)
-2. Extract `main.js`, `manifest.json`, and `styles.css`
-3. Copy to `.obsidian/plugins/email2obsidian/` in your vault
-4. Reload Obsidian (Cmd/Ctrl + R)
-5. Enable in **Settings** → **Community Plugins**
+### via Community Plug-ins
+- https://community.obsidian.md/plugins/send-email-into-vault
 
 
 ## Setup
