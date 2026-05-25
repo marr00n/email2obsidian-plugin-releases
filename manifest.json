@@ -1,6 +1,6 @@
 {
   "id": "send-email-into-vault",
-  "name": "Email2Obsidian",
+  "name": "Email 2 Obsidian Vault",
   "version": "0.2.1",
   "minAppVersion": "0.16.0",
   "description": "Sync email-derived notes and attachments from a third party service into your vault with full formatting and dedupe.",
