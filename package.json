@@ -1,6 +1,6 @@
 {
   "name": "email2obsidian",
-  "version": "3.0.5",
+  "version": "3.0.6",
   "description": "Obsidian plugin scaffold for syncing notes and attachments from Email2Obsidian.",
   "main": "dist/main.js",
   "repository": "https://email2obsidian.com",
