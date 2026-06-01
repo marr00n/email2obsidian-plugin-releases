@@ -25,6 +25,7 @@ Send an email and it appears in your Obsidian vault as a complete note, includin
 - Knowledge workers and students emailing themselves research, ideas, or documents
 - Obsidian power users who want fast capture without disrupting their workflow
 
+
 ## Paid Plans
 [Get Started for Free](https://email2obsidian.com/signup). [Upgrade when ready](https://email2obsidian.com/pricing)
 
