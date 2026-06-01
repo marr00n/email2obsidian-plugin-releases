@@ -18,7 +18,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - run: npm ci
 
@@ -27,7 +27,7 @@ jobs:
       - name: Attest main.js
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: main.js
+          subject-path: dist/main.js
 
       - name: Attest styles.css
         uses: actions/attest-build-provenance@v2
@@ -38,6 +38,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            main.js
-            manifest.json
+            dist/main.js
+            dist/manifest.json
             styles.css
