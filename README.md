@@ -5,7 +5,7 @@
 ## Send Email into Vault by Email2Obsidian
 Send an email and it appears in your Obsidian vault as a complete note, including the subject, body, and any attachments.
 
-👉 [Get Started for Free](https://email2obsidian.com/signup) 
+👉 [Get Started with Free Trial](https://email2obsidian.com/signup) 
 
 ## Features
 - **Works on desktop and mobile** — access your ingestion address from any device
@@ -27,7 +27,7 @@ Send an email and it appears in your Obsidian vault as a complete note, includin
 
 
 ## Paid Plans
-[Get Started for Free](https://email2obsidian.com/signup). [Upgrade when ready](https://email2obsidian.com/pricing)
+[Get Started with Free Trial](https://email2obsidian.com/signup). [Upgrade when ready](https://email2obsidian.com/pricing)
 
 ---
 ## Installation
