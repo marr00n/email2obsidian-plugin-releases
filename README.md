@@ -12,7 +12,6 @@ Send an email and it appears in your Obsidian vault as a complete note, includin
 - **Flexible sync** — trigger manually, on a schedule, or automatically when your vault opens
 - **Safe file handling** — new notes never overwrite existing files in your vault
 - **Configurable attachment storage** — choose where attachments are saved within your vault
-- **Multiple vault support** — route emails to different vaults *(coming soon)*
 - **Strong privacy** — emails are automatically deleted after 72 hours and are never sold, shared, or used for AI training; no vault telemetry
 
 ## How it works
@@ -25,7 +24,9 @@ Send an email and it appears in your Obsidian vault as a complete note, includin
 - Knowledge workers and students emailing themselves research, ideas, or documents
 - Obsidian power users who want fast capture without disrupting their workflow
 
-
+## Upcoming Features
+- **Multiple vault support** — route emails to different vaults
+ 
 ## Paid Plans
 [Get Started with Free Trial](https://email2obsidian.com/signup). [Upgrade when ready](https://email2obsidian.com/pricing)
 
