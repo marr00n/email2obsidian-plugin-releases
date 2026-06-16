@@ -109,6 +109,10 @@ export async function runSync(
 
         const notePath = joinPosix(noteFolder, filenameResult.filename);
 
+        // Create the note before saving attachments so Obsidian can resolve
+        // relative attachment paths ("Same folder as current file", etc.).
+        await writeOrCreateNote(vault, notePath, '');
+
         const saveStart = Date.now();
         const savedAttachments: SaveAttachmentsResult = await saveAttachments({
           vault,
