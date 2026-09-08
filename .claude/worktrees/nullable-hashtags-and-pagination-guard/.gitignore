@@ -1,0 +1,44 @@
+# Build artifacts
+dist/
+*.map
+Plan/
+eslint.config.mjs
+
+# Dependencies
+node_modules/
+
+# Local env/secrets
+.env
+.env.*
+
+# Logs/cache
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log*
+.cache/
+.esbuild/
+.eslintcache
+tsconfig.eslint.json
+z_errors_to_fix
+
+# Claude
+CLAUDE.md
+MEMORY.md
+
+# Editor/OS cruft
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Test output
+coverage/
+
+# Scratch files kept alongside the suite, not part of it
+tests/Fixes.md
+tests/API reponse test.json
+
+# Obsidian vault noise during dev
+.obsidian/
+.trash/
