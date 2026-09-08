@@ -2,8 +2,6 @@
 dist/
 *.map
 Plan/
-tests/
-vitest.config.ts
 eslint.config.mjs
 
 # Dependencies
@@ -36,6 +34,10 @@ Thumbs.db
 
 # Test output
 coverage/
+
+# Scratch files kept alongside the suite, not part of it
+tests/Fixes.md
+tests/API reponse test.json
 
 # Obsidian vault noise during dev
 .obsidian/
