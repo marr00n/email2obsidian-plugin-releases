@@ -1,22 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 import { runSync } from '../src/pipeline';
-import { Vault, Plugin, App } from 'obsidian';
+import type { Plugin as ObsidianPlugin, Vault as ObsidianVault } from 'obsidian';
+import { Vault, Plugin, App } from './obsidian-fakes';
+import {
+  mockListEmails,
+  mockGetEmail,
+  mockDownloadAttachment,
+  resetApiMocks,
+} from './api-mock';
 
-const mockListEmails = vi.fn();
-const mockGetEmail = vi.fn();
-const mockDownload = vi.fn();
-
-vi.mock('../src/api', () => ({
-  listEmails: (...args: any[]) => mockListEmails(...args),
-  getEmail: (...args: any[]) => mockGetEmail(...args),
-  downloadAttachment: (...args: any[]) => mockDownload(...args),
-}));
+vi.mock('../src/api', async () => (await import('./api-mock')).apiMock());
 
 beforeEach(() => {
-  mockListEmails.mockReset();
-  mockGetEmail.mockReset();
-  mockDownload.mockReset();
+  resetApiMocks();
 });
 
 describe('pipeline runSync', () => {
@@ -41,14 +38,14 @@ describe('pipeline runSync', () => {
       ],
     });
 
-    mockDownload.mockResolvedValue({ data: new Uint8Array([1]).buffer, mimeType: 'text/plain', fileName: 'doc.txt' });
+    mockDownloadAttachment.mockResolvedValue({ data: new Uint8Array([1]).buffer, mimeType: 'text/plain', fileName: 'doc.txt' });
 
     const result = await runSync(
       {
         mode: 'fetch-new',
         settings: { apiKey: 'k', notesFolder: 'Notes' },
-        vault,
-        plugin,
+        vault: vault as unknown as ObsidianVault,
+        plugin: plugin as unknown as ObsidianPlugin,
       },
       () => {}
     );

@@ -9,7 +9,7 @@ import {
   normalizePath,
 } from 'obsidian';
 import { ApiError, listEmails } from './api';
-import { runSync, SyncMode } from './pipeline';
+import { runSync, isTruncated, SyncMode } from './pipeline';
 
 export type SyncInterval =
   | '5m'
@@ -136,9 +136,14 @@ export default class Email2ObsidianPlugin extends Plugin {
       await this.saveSettings();
 
       this.debugLog(
-        `handleSync completed in ${Date.now() - runStart}ms; errors=${result.errors.length}, attachmentErrors=${result.attachmentErrors.length}`
+        `handleSync completed in ${Date.now() - runStart}ms; stop=${result.stop}, errors=${result.errors.length}, attachmentErrors=${result.attachmentErrors.length}`
       );
 
+      if (isTruncated(result.stop)) {
+        console.warn(
+          `[Email2Obsidian] Sync did not reach every page (${result.stop}); ${result.synced} emails added before it stopped.`
+        );
+      }
       if (result.errors.length) {
         console.warn(
           '[Email2Obsidian] Sync finished with errors:',

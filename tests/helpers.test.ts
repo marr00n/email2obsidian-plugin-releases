@@ -3,16 +3,17 @@ import { describe, it, expect, vi } from 'vitest';
 import { processInlinePlaceholders, renderEmailMarkdown } from '../src/helpers';
 import type { AttachmentMeta, EmailDetail } from '../src/api';
 
-const saver = vi.fn(async (opts: any) => {
-  const existing = saver.calls?.map((c: any) => c[0]?.suggestedName) || [];
+/** Names the saver has already handed out, so it can de-duplicate like the real one. */
+const savedNames: string[] = [];
+
+const saver = vi.fn(async (opts: { suggestedName: string }) => {
   let filename = opts.suggestedName;
   let suffix = 1;
-  while (existing.includes(filename)) {
+  while (savedNames.includes(filename)) {
     filename = `${opts.suggestedName}-${suffix}`;
     suffix += 1;
   }
-  saver.calls = saver.calls || [];
-  saver.calls.push([opts]);
+  savedNames.push(opts.suggestedName);
   return { filename, path: `Assets/${filename}` };
 });
 

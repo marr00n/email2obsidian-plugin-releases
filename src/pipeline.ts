@@ -28,9 +28,22 @@ export type SyncMode = 'fetch-new' | 'fetch-all';
 /**
  * Why pagination stopped. 'complete' walked every page; 'known-email' hit an
  * already-logged email during fetch-new; 'cursor-missing' means the server
- * promised another page without a cursor to reach it, so the run is short.
+ * promised another page without a cursor to reach it; 'timed-out' means the
+ * walk outlived its budget. The last two leave the run short.
  */
-export type PaginationStop = 'complete' | 'known-email' | 'cursor-missing';
+export type PaginationStop = 'complete' | 'known-email' | 'cursor-missing' | 'timed-out';
+
+/** A walk that ended this way did not reach every page. */
+export function isTruncated(stop: PaginationStop): boolean {
+  return stop === 'cursor-missing' || stop === 'timed-out';
+}
+
+/**
+ * How long paginateEmails may keep asking for pages. A server that repeats a
+ * cursor, or hands back pages indefinitely, is bounded by this rather than
+ * hanging the sync for the life of the Obsidian session.
+ */
+const PAGINATION_BUDGET_MS = 180_000;
 
 export interface SyncOptions {
   mode: SyncMode;
@@ -45,7 +58,7 @@ export interface SyncResult {
   errors: string[];
   attachmentErrors: AttachmentSaveError[];
   rateLimited: boolean;
-  truncated: boolean;
+  stop: PaginationStop;
 }
 
 export async function runSync(
@@ -88,12 +101,12 @@ export async function runSync(
     `selection: mode=${mode}, total summaries=${emailSummaries.length}, selected=${selected.length}, skipped=${skipped}, stop=${stop}`
   );
 
-  const truncated = stop === 'cursor-missing';
+  const truncated = isTruncated(stop);
   if (truncated) {
-    const message =
-      'Email2Obsidian stopped paging early, so some emails may be missing. Run the sync again shortly.';
-    notifier(message);
-    console.warn(`[Email2Obsidian] ${message}`);
+    warnUser(
+      notifier,
+      'Email2Obsidian stopped paging early, so some emails may be missing. Run "Fetch all notes" to pick them up. "Fetch new notes" stops at the first email it has already filed, so it will never reach them.'
+    );
   }
 
   const successes: FetchLogInput[] = [];
@@ -199,10 +212,10 @@ export async function runSync(
   );
 
   if (rateLimitedError) {
-    const message =
-      "You've hit the rate limit. Please wait a bit or lower the sync frequency.";
-    notifier(message);
-    console.warn(`[Email2Obsidian] ${message}`);
+    warnUser(
+      notifier,
+      "You've hit the rate limit. Please wait a bit or lower the sync frequency."
+    );
     if (mode === 'fetch-new' && successes.length) {
       const nextLog = appendFetchLog(fetchLog, successes);
       await writeFetchLog(plugin, nextLog);
@@ -213,11 +226,14 @@ export async function runSync(
       errors,
       attachmentErrors,
       rateLimited: true,
-      truncated,
+      stop,
     };
   }
 
-  if (mode === 'fetch-new') {
+  // Rewriting the log discards every id the run didn't handle, which is only
+  // safe when fetch-all actually walked to the end. A truncated walk appends,
+  // like fetch-new, so the emails it never reached stay logged.
+  if (mode === 'fetch-new' || truncated) {
     if (successes.length) {
       const nextLog = appendFetchLog(fetchLog, successes);
       const writeLogStart = Date.now();
@@ -231,9 +247,14 @@ export async function runSync(
     debugLog(`fetch log rewritten with ${successes.length} entries in ${Date.now() - writeLogStart}ms`);
   }
 
-  notifier(
-    `Email2Obsidian Sync summary: ${successes.length} added, ${skipped} skipped, ${errors.length} errors, ${attachmentErrors.length} attachment issues.`
-  );
+  // A summary reading "N added, 0 errors" straight after the truncation
+  // warning reads as a clean bill of health, and it is the notice left on
+  // screen. The warning stands alone instead.
+  if (!truncated) {
+    notifier(
+      `Email2Obsidian Sync summary: ${successes.length} added, ${skipped} skipped, ${errors.length} errors, ${attachmentErrors.length} attachment issues.`
+    );
+  }
 
   return {
     synced: successes.length,
@@ -241,8 +262,14 @@ export async function runSync(
     errors,
     attachmentErrors,
     rateLimited: false,
-    truncated,
+    stop,
   };
+}
+
+/** Tell the user, and leave the same line in the console for a bug report. */
+function warnUser(notifier: (msg: string) => void, message: string): void {
+  notifier(message);
+  console.warn(`[Email2Obsidian] ${message}`);
 }
 
 async function paginateEmails(
@@ -258,6 +285,13 @@ async function paginateEmails(
   let stop: PaginationStop = 'complete';
 
   while (hasMore) {
+    // A server that keeps handing back the same cursor would otherwise page
+    // forever, leaving isSyncing set and every later sync refused.
+    if (page > 0 && Date.now() - started > PAGINATION_BUDGET_MS) {
+      stop = 'timed-out';
+      break;
+    }
+
     const pageStart = Date.now();
     const response = await listEmails({ apiKey, cursor, sort: 'date-desc' });
     log?.(

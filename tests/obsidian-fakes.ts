@@ -105,6 +105,30 @@ export class Vault {
   }
 }
 
+export interface RequestUrlResponse {
+  status: number;
+  headers: Record<string, string>;
+  arrayBuffer: ArrayBuffer;
+  json: unknown;
+  text: string;
+}
+
+/**
+ * Stands in for Obsidian's network call. Every test mocks src/api above this
+ * level, so reaching here means a request escaped that mock.
+ */
+export function requestUrl(_options: unknown): Promise<RequestUrlResponse> {
+  return Promise.reject(
+    new Error('requestUrl called in a test: mock ../src/api instead of hitting the network')
+  );
+}
+
+export interface Command {
+  id: string;
+  name: string;
+  callback: () => unknown;
+}
+
 export class Notice {
   message: string;
   constructor(message: string) {
@@ -128,11 +152,16 @@ export class App {
 
 export class Plugin {
   app: App;
+  /** Commands the plugin registered, so a test can invoke one as a user would. */
+  commands: Command[] = [];
   private data: Record<string, unknown> = {};
   constructor(app: App, _manifest?: unknown) {
     this.app = app;
   }
-  addCommand() {}
+  addCommand(command: Command) {
+    this.commands.push(command);
+    return command;
+  }
   addSettingTab() {}
   registerInterval() {}
   async loadData() {

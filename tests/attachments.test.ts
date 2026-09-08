@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { saveAttachments, saveBinaryData } from '../src/attachments';
-import { Vault, FileManager } from 'obsidian';
+import type { Vault as ObsidianVault, FileManager as ObsidianFileManager } from 'obsidian';
+import { Vault, FileManager } from './obsidian-fakes';
 
 function toArrayBuffer(text: string): ArrayBuffer {
   return new TextEncoder().encode(text).buffer;
@@ -12,8 +13,8 @@ describe('attachments', () => {
     const fileManager = new FileManager((name) => `Assets/${name}`);
 
     const result = await saveBinaryData({
-      vault,
-      fileManager,
+      vault: vault as unknown as ObsidianVault,
+      fileManager: fileManager as unknown as ObsidianFileManager,
       data: toArrayBuffer('hello'),
       suggestedName: 'report.pdf',
       sourcePath: 'Notes/email.md',
@@ -29,8 +30,8 @@ describe('attachments', () => {
     const fileManager = new FileManager((name) => `Global/${name}`);
 
     const result = await saveAttachments({
-      vault,
-      fileManager,
+      vault: vault as unknown as ObsidianVault,
+      fileManager: fileManager as unknown as ObsidianFileManager,
       apiKey: 'test-key',
       sourcePath: 'Notes/email.md',
       attachments: [
