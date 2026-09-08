@@ -9,7 +9,7 @@ export interface EmailSummary {
   id: number;
   subject: string;
   createdAt: string;
-  hashtags: string[];
+  hashtags: string[] | null;
 }
 
 export interface EmailListRequest {
@@ -233,7 +233,9 @@ function isEmailDetailResponse(data: unknown): data is EmailDetail {
   const obj = data as Record<string, unknown>;
   if (typeof obj.id !== 'number') return false;
   if (typeof obj.subject !== 'string') return false;
-  if (!Array.isArray(obj.hashtags)) return false;
+  // `hashtags` is a nullable column server-side: null means "no hashtags", not a
+  // malformed response. Consumers already coalesce it to [].
+  if (obj.hashtags != null && !Array.isArray(obj.hashtags)) return false;
   if (typeof obj.markdownBody !== 'string') return false;
   if (!Array.isArray(obj.attachments)) return false;
   return true;

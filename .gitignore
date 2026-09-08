@@ -2,9 +2,6 @@
 dist/
 *.map
 Plan/
-tests/
-vitest.config.ts
-eslint.config.mjs
 
 # Dependencies
 node_modules/
@@ -21,12 +18,12 @@ yarn-error.log*
 .cache/
 .esbuild/
 .eslintcache
-tsconfig.eslint.json
 z_errors_to_fix
 
 # Claude
 CLAUDE.md
 MEMORY.md
+.claude/worktrees/
 
 # Editor/OS cruft
 .DS_Store

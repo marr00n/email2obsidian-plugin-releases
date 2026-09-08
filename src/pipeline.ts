@@ -25,6 +25,13 @@ export interface PipelineSettings {
 
 export type SyncMode = 'fetch-new' | 'fetch-all';
 
+/**
+ * Why pagination stopped. 'complete' walked every page; 'known-email' hit an
+ * already-logged email during fetch-new; 'cursor-missing' means the server
+ * promised another page without a cursor to reach it, so the run is short.
+ */
+export type PaginationStop = 'complete' | 'known-email' | 'cursor-missing';
+
 export interface SyncOptions {
   mode: SyncMode;
   settings: PipelineSettings;
@@ -38,6 +45,7 @@ export interface SyncResult {
   errors: string[];
   attachmentErrors: AttachmentSaveError[];
   rateLimited: boolean;
+  truncated: boolean;
 }
 
 export async function runSync(
@@ -67,7 +75,7 @@ export async function runSync(
   const fetchLog = await loadFetchLog(plugin);
   const loggedIds = new Set(Object.keys(fetchLog));
 
-  const { emails: emailSummaries, stoppedEarly } = await paginateEmails(apiKey, debugLog, {
+  const { emails: emailSummaries, stop } = await paginateEmails(apiKey, debugLog, {
     stopOnLogged: mode === 'fetch-new' ? loggedIds : undefined,
   });
 
@@ -77,8 +85,16 @@ export async function runSync(
 
   const skipped = mode === 'fetch-new' ? emailSummaries.length - selected.length : 0;
   debugLog(
-    `selection: mode=${mode}, total summaries=${emailSummaries.length}, selected=${selected.length}, skipped=${skipped}, stoppedEarly=${stoppedEarly}`
+    `selection: mode=${mode}, total summaries=${emailSummaries.length}, selected=${selected.length}, skipped=${skipped}, stop=${stop}`
   );
+
+  const truncated = stop === 'cursor-missing';
+  if (truncated) {
+    const message =
+      'Email2Obsidian stopped paging early, so some emails may be missing. Run the sync again shortly.';
+    notifier(message);
+    console.warn(`[Email2Obsidian] ${message}`);
+  }
 
   const successes: FetchLogInput[] = [];
   const errors: string[] = [];
@@ -197,6 +213,7 @@ export async function runSync(
       errors,
       attachmentErrors,
       rateLimited: true,
+      truncated,
     };
   }
 
@@ -224,6 +241,7 @@ export async function runSync(
     errors,
     attachmentErrors,
     rateLimited: false,
+    truncated,
   };
 }
 
@@ -231,13 +249,13 @@ async function paginateEmails(
   apiKey: string,
   log?: (msg: string) => void,
   options: { stopOnLogged?: Set<string> } = {}
-): Promise<{ emails: EmailSummary[]; stoppedEarly: boolean }> {
+): Promise<{ emails: EmailSummary[]; stop: PaginationStop }> {
   const emails: EmailSummary[] = [];
   let cursor: string | undefined;
   let hasMore = true;
   const started = Date.now();
   let page = 0;
-  let stoppedEarly = false;
+  let stop: PaginationStop = 'complete';
 
   while (hasMore) {
     const pageStart = Date.now();
@@ -250,7 +268,7 @@ async function paginateEmails(
     emails.push(...(response.emails || []));
 
     if (options.stopOnLogged && response.emails?.some((e) => options.stopOnLogged?.has(String(e.id)))) {
-      stoppedEarly = true;
+      stop = 'known-email';
       break;
     }
 
@@ -258,6 +276,12 @@ async function paginateEmails(
     cursor = response.nextCursor ?? undefined;
     page += 1;
     if (!hasMore) break;
+    // The server says there is another page but gave us no cursor to reach it.
+    // Re-requesting without one restarts at page 0, so bail instead of looping.
+    if (!cursor) {
+      stop = 'cursor-missing';
+      break;
+    }
   }
 
   log?.(
@@ -265,7 +289,7 @@ async function paginateEmails(
       Date.now() - started
     }ms`
   );
-  return { emails, stoppedEarly };
+  return { emails, stop };
 }
 
 async function loadExistingNoteNames(
