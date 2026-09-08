@@ -24,9 +24,6 @@ yarn-error.log*
 tsconfig.eslint.json
 z_errors_to_fix
 
-# Claude
-MEMORY.md
-
 # Editor/OS cruft
 .DS_Store
 Thumbs.db
