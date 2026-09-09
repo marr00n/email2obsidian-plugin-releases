@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { openLedger, type FetchLog } from '../src/fetch-ledger';
+import { openLedger, type LedgerData } from '../src/fetch-ledger';
 import type { EmailSummary } from '../src/api';
 import { App, Plugin, Vault } from 'obsidian';
 
@@ -16,8 +16,8 @@ function oldFormatLog(): Record<string, unknown> {
   };
 }
 
-async function storedLog(plugin: Plugin): Promise<FetchLog> {
-  const envelope = (await plugin.loadData()) as { 'fetch-log'?: FetchLog };
+async function storedLog(plugin: Plugin): Promise<LedgerData> {
+  const envelope = (await plugin.loadData()) as { 'fetch-log'?: LedgerData };
   return envelope['fetch-log'] ?? {};
 }
 
@@ -202,5 +202,19 @@ describe('fetch ledger', () => {
     expect(await storedLog(plugin)).toEqual({
       '7': { fetchedAt: '2021-01-07T00:00:00.000Z', filename: 'Seven.md' },
     });
+  });
+
+  it('routes a load failure through a supplied warn instead of console.warn', async () => {
+    const plugin = newPlugin();
+    plugin.loadData = () => Promise.reject(new Error('disk exploded'));
+    const warnings: unknown[][] = [];
+
+    const ledger = await openLedger(plugin, {
+      clock,
+      warn: (msg, ...details) => warnings.push([msg, ...details]),
+    });
+
+    expect(ledger.hasSeen(1)).toBe(false);
+    expect(warnings).toEqual([['Failed to load fetch ledger via plugin data: disk exploded']]);
   });
 });

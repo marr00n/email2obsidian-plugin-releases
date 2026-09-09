@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 import { runSync } from '../src/pipeline';
 import { createE2oClient } from '../src/api';
@@ -263,5 +263,67 @@ describe('pipeline runSync', () => {
     const stored = (await plugin.loadData()) as { 'fetch-log'?: Record<string, unknown> };
     expect(stored['fetch-log']).toHaveProperty('1');
     expect(stored['fetch-log']).not.toHaveProperty('2');
+  });
+
+  it('stops the scan instead of looping forever when hasMore is true but no cursor is sent', async () => {
+    const vault = new Vault();
+    const plugin = new Plugin(new App(vault));
+
+    let listCalls = 0;
+
+    const http = createFakeHttp([
+      {
+        pattern: /^\/api\/emails$/,
+        handler: () => {
+          listCalls += 1;
+          return jsonResponse(200, {
+            emails: [
+              { id: 1, subject: 'Only page', createdAt: '2021-01-01 00:00:00', hashtags: [], vault: null },
+            ],
+            // A server bug: more claimed to exist, but no cursor to fetch it with.
+            hasMore: true,
+            nextCursor: null,
+          });
+        },
+      },
+      {
+        pattern: /^\/api\/emails\/1$/,
+        handler: () =>
+          jsonResponse(200, {
+            id: 1,
+            subject: 'Only page',
+            createdAt: '2021-01-01 00:00:00',
+            hashtags: [],
+            vault: null,
+            markdownBody: 'Body, no attachments.',
+            attachments: [],
+          }),
+      },
+    ]);
+    const client = createE2oClient({ apiKey: 'k', http });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // fetch-all: paginateEmails runs with no stopWhen, so this exercises the
+    // pagination loop itself rather than the ledger's early-stop.
+    const result = await runSync({
+      mode: 'fetch-all',
+      settings: { apiKey: 'k', notesFolder: 'Notes' },
+      vault,
+      plugin,
+      client,
+      report: createSyncReport({ showNotice: () => {}, debugEnabled: false }),
+    });
+
+    // Completes rather than hanging, having fetched only the one page.
+    expect(listCalls).toBe(1);
+    expect(result.synced).toBe(1);
+    expect(result.errors).toHaveLength(0);
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('reported more emails but sent no cursor')
+    );
+
+    warnSpy.mockRestore();
   });
 });

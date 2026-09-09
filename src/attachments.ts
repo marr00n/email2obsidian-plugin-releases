@@ -1,5 +1,5 @@
 import { Vault, TFile, FileManager } from 'obsidian';
-import type { AttachmentMeta, DownloadAttachment } from './api';
+import type { AttachmentDownload, AttachmentMeta, DownloadAttachment } from './api';
 import { basename, extname } from './path-utils';
 import { mapWithConcurrency } from './concurrency';
 import type { SyncReport } from './sync-report';
@@ -144,7 +144,10 @@ export async function saveAttachments(
   const errors: AttachmentSaveError[] = [];
   const savedPathById: Record<number, string> = {};
 
-  const downloads = await mapWithConcurrency(
+  // No `shouldStop` is passed here, so `mapWithConcurrency` never leaves a
+  // hole: every item runs and lands a defined result at its index. The cast
+  // reflects that guarantee rather than weakening it away.
+  const downloads = (await mapWithConcurrency(
     nonInlineAttachments,
     3,
     async (att, index) => {
@@ -166,7 +169,7 @@ export async function saveAttachments(
         return null;
       }
     }
-  );
+  )) as ({ att: AttachmentMeta; baseName: string; downloaded: AttachmentDownload } | null)[];
 
   for (const item of downloads) {
     if (!item || !item.downloaded) continue;

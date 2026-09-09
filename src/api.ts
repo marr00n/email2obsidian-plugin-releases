@@ -1,5 +1,5 @@
-/* global console */
 import { requestUrl } from 'obsidian';
+import { prefixedWarn } from './sync-report';
 
 export const EMAIL2OBSIDIAN_API_BASE = 'https://email2obsidian.com/';
 
@@ -216,9 +216,11 @@ export function createE2oClient({
  * Transport plumbing
  * ---------------------------------------------------------------------- */
 
-function defaultWarn(msg: string): void {
-  console.warn(`[Email2Obsidian] ${msg}`);
-}
+/**
+ * The default when no `SyncReport`-backed `warn` is supplied: the same
+ * `[Email2Obsidian] ` prefix, from the one module that owns that literal.
+ */
+const defaultWarn = prefixedWarn;
 
 async function safeFetch(
   http: HttpAdapter,

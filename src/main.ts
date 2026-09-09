@@ -11,7 +11,7 @@ import {
 import { ApiError, createE2oClient, type E2oClient } from './api';
 import { runSync, SyncMode } from './pipeline';
 import { isRootPath } from './path-utils';
-import { createSyncReport, type SyncReport } from './sync-report';
+import { createSyncReport, prefixedWarn, type SyncReport } from './sync-report';
 
 export type SyncInterval =
   | '5m'
@@ -401,7 +401,9 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
     btn.setButtonText('Testing…');
 
     try {
-      await createE2oClient({ apiKey }).listEmails({ sort: 'date-desc' });
+      await createE2oClient({ apiKey, warn: prefixedWarn }).listEmails({
+        sort: 'date-desc',
+      });
       new Notice('Connected to Email2Obsidian.', 3000);
     } catch (error) {
       if (error instanceof ApiError) {

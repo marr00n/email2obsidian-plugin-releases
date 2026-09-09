@@ -43,12 +43,11 @@ export async function resolveNoteFolder(
 
 /**
  * Create `folder` if it doesn't already exist. A no-op for root ('' or '.').
- * Shared by `resolveNoteFolder`; exported for the one other caller (see
- * `attachments.ts` history — attachment saves resolve their own location via
- * `fileManager.getAvailablePathForAttachment`, which creates missing folders
- * itself, so this is only ever called for the notes folder).
+ * Used only by `resolveNoteFolder` above — attachment saves resolve their own
+ * location via `fileManager.getAvailablePathForAttachment`, which creates
+ * missing folders itself, so this is only ever called for the notes folder.
  */
-export async function ensureFolder(vault: Vault, folder: string): Promise<void> {
+async function ensureFolder(vault: Vault, folder: string): Promise<void> {
   if (!folder || isRootPath(folder)) {
     return;
   }

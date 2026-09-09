@@ -54,10 +54,14 @@ export async function runSync(opts: SyncOptions): Promise<SyncResult> {
   const noteFolder = await resolveNoteFolder(vault, settings.notesFolder ?? '');
 
   const namerStart = Date.now();
-  const namer = await openNoteNames(vault, noteFolder.path);
+  const namer = await openNoteNames(vault, noteFolder.path, {
+    warn: (msg, ...details) => report.warn(msg, ...details),
+  });
   report.debug(`openNoteNames in ${Date.now() - namerStart}ms`);
 
-  const ledger = await openLedger(plugin);
+  const ledger = await openLedger(plugin, {
+    warn: (msg, ...details) => report.warn(msg, ...details),
+  });
 
   const { emails: emailSummaries, stoppedEarly } = await paginateEmails(client, report, {
     // fetch-all wants the whole stream; only fetch-new leans on the ledger's

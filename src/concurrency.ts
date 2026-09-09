@@ -17,14 +17,25 @@ export interface MapWithConcurrencyOptions {
   shouldStop?: () => boolean;
 }
 
+/**
+ * Runs `worker` over `items` with at most `limit` in flight at once.
+ *
+ * Without `shouldStop`, every item runs and the result is fully populated —
+ * `(R | undefined)[]` still applies, but every slot is in fact an `R`. With
+ * `shouldStop`, once it starts returning `true` any item not yet claimed by a
+ * worker is never started, and its slot in the returned array stays
+ * `undefined` rather than being filled in some other way — callers that pass
+ * `shouldStop` must be prepared for holes; callers that don't may rely on a
+ * full array.
+ */
 export async function mapWithConcurrency<T, R>(
   items: T[],
   limit: number,
   worker: (item: T, index: number) => Promise<R>,
   options: MapWithConcurrencyOptions = {}
-): Promise<R[]> {
+): Promise<(R | undefined)[]> {
   const { shouldStop } = options;
-  const results: R[] = [];
+  const results: (R | undefined)[] = [];
   let current = 0;
 
   const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {

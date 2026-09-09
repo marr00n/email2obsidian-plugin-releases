@@ -1,6 +1,6 @@
-/* global console */
 import { Plugin } from 'obsidian';
 import type { EmailSummary } from './api';
+import { prefixedWarn } from './sync-report';
 
 /* -------------------------------------------------------------------------
  * Fetch Ledger
@@ -40,14 +40,14 @@ import type { EmailSummary } from './api';
 /** The two disciplines a run commits under. */
 export type SyncMode = 'fetch-new' | 'fetch-all';
 
-export interface FetchLogEntry {
+export interface LedgerEntry {
   fetchedAt: string;
   filename?: string;
   /** Absent — the shape every pre-decline log has — means accepted. */
   status?: 'declined';
 }
 
-export type FetchLog = Record<string, FetchLogEntry>;
+export type LedgerData = Record<string, LedgerEntry>;
 
 export interface CommitOptions {
   mode: SyncMode;
@@ -82,6 +82,13 @@ export interface Ledger {
 export interface OpenLedgerOptions {
   /** Injectable for tests; stamps `fetchedAt` on new entries. */
   clock?: () => string;
+  /**
+   * Where a load failure is reported. Defaults to the same prefixed
+   * `console.warn` this has always used, so callers that don't pass one see
+   * no change; `runSync` passes `report.warn` so the failure narrates
+   * through the sync's one seam instead.
+   */
+  warn?: (msg: string, ...details: unknown[]) => void;
 }
 
 const FETCH_LOG_KEY = 'fetch-log';
@@ -91,20 +98,21 @@ export async function openLedger(
   options: OpenLedgerOptions = {}
 ): Promise<Ledger> {
   const clock = options.clock ?? (() => new Date().toISOString());
-  return new FetchLedger(plugin, await loadFetchLog(plugin), clock);
+  const warn = options.warn ?? prefixedWarn;
+  return new FetchLedger(plugin, await loadLedger(plugin, warn), clock);
 }
 
 class FetchLedger implements Ledger {
   private readonly plugin: Plugin;
   private readonly clock: () => string;
   /** What the last commit (or this install's history) left on disk. */
-  private stored: FetchLog;
+  private stored: LedgerData;
   /** What this run has decided, in the order it decided it. */
-  private pending = new Map<string, FetchLogEntry>();
+  private pending = new Map<string, LedgerEntry>();
   /** `forgetDeclines` makes a write worthwhile even with nothing accepted. */
   private forgotten = false;
 
-  constructor(plugin: Plugin, stored: FetchLog, clock: () => string) {
+  constructor(plugin: Plugin, stored: LedgerData, clock: () => string) {
     this.plugin = plugin;
     this.stored = stored;
     this.clock = clock;
@@ -153,15 +161,15 @@ class FetchLedger implements Ledger {
     await this.write({ ...this.stored, ...this.snapshot() });
   }
 
-  private snapshot(): FetchLog {
-    const next: FetchLog = {};
+  private snapshot(): LedgerData {
+    const next: LedgerData = {};
     for (const [key, entry] of Array.from(this.pending)) {
       next[key] = entry;
     }
     return next;
   }
 
-  private async write(log: FetchLog): Promise<void> {
+  private async write(log: LedgerData): Promise<void> {
     const existing: unknown = await this.plugin.loadData();
     const payload = {
       ...(existing && typeof existing === 'object' ? existing : {}),
@@ -174,7 +182,10 @@ class FetchLedger implements Ledger {
   }
 }
 
-async function loadFetchLog(plugin: Plugin): Promise<FetchLog> {
+async function loadLedger(
+  plugin: Plugin,
+  warn: (msg: string, ...details: unknown[]) => void
+): Promise<LedgerData> {
   try {
     const raw: unknown = await plugin.loadData();
     if (!raw || typeof raw !== 'object') {
@@ -186,7 +197,7 @@ async function loadFetchLog(plugin: Plugin): Promise<FetchLog> {
       return {};
     }
     const parsed = stored as Record<string, unknown>;
-    const log: FetchLog = {};
+    const log: LedgerData = {};
     for (const [key, value] of Object.entries(parsed)) {
       const entry = value as Record<string, unknown>;
       if (typeof entry.fetchedAt !== 'string') continue;
@@ -203,9 +214,7 @@ async function loadFetchLog(plugin: Plugin): Promise<FetchLog> {
     }
     return log;
   } catch (error) {
-    console.warn(
-      `[Email2Obsidian] Failed to load fetch ledger via plugin data: ${(error as Error).message}`
-    );
+    warn(`Failed to load fetch ledger via plugin data: ${(error as Error).message}`);
     return {};
   }
 }
