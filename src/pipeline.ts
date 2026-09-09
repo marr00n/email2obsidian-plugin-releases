@@ -1,13 +1,7 @@
 /* global console */
 import { normalizePath, Notice, Plugin, Vault, TFile } from 'obsidian';
 import { ApiError, type E2oClient, type EmailSummary } from './api';
-import {
-  appendFetchLog,
-  loadFetchLog,
-  rewriteFetchLog,
-  writeFetchLog,
-  FetchLogInput,
-} from './fetch-log-store';
+import { openLedger, type SyncMode } from './fetch-ledger';
 import { renderEmailMarkdown } from './helpers';
 import { openNoteNames } from './note-namer';
 import {
@@ -24,7 +18,7 @@ export interface PipelineSettings {
   debugLogging?: boolean;
 }
 
-export type SyncMode = 'fetch-new' | 'fetch-all';
+export type { SyncMode };
 
 export interface SyncOptions {
   mode: SyncMode;
@@ -64,23 +58,25 @@ export async function runSync(
   const namer = await openNoteNames(vault, noteFolder);
   debugLog(`openNoteNames in ${Date.now() - namerStart}ms`);
 
-  const fetchLog = await loadFetchLog(plugin);
-  const loggedIds = new Set(Object.keys(fetchLog));
+  const ledger = await openLedger(plugin);
 
   const { emails: emailSummaries, stoppedEarly } = await paginateEmails(client, debugLog, {
-    stopOnLogged: mode === 'fetch-new' ? loggedIds : undefined,
+    // fetch-all wants the whole stream; only fetch-new leans on the ledger's
+    // contiguity to stop scanning.
+    stopWhen:
+      mode === 'fetch-new' ? (page) => ledger.shouldStopScan(page) : undefined,
   });
 
   const selected = mode === 'fetch-all'
     ? emailSummaries
-    : emailSummaries.filter((email) => !loggedIds.has(String(email.id)));
+    : emailSummaries.filter((email) => !ledger.hasSeen(email.id));
 
   const skipped = mode === 'fetch-new' ? emailSummaries.length - selected.length : 0;
   debugLog(
     `selection: mode=${mode}, total summaries=${emailSummaries.length}, selected=${selected.length}, skipped=${skipped}, stoppedEarly=${stoppedEarly}`
   );
 
-  const successes: FetchLogInput[] = [];
+  let accepted = 0;
   const errors: string[] = [];
   const attachmentErrors: AttachmentSaveError[] = [];
   let rateLimitedError: ApiError | null = null;
@@ -155,10 +151,8 @@ export async function runSync(
         await writeOrCreateNote(vault, notePath, markdown);
         debugLog(`writeOrCreateNote ${notePath || '(root)'} in ${Date.now() - writeStart}ms`);
 
-        successes.push({
-          id: detail.id,
-          filename: basename(notePath),
-        });
+        ledger.accept(detail.id, basename(notePath));
+        accepted += 1;
       } catch (error: unknown) {
         if (error instanceof ApiError && error.code === 'rate-limited') {
           rateLimitedError = error;
@@ -180,12 +174,9 @@ export async function runSync(
       "You've hit the rate limit. Please wait a bit or lower the sync frequency.";
     notifier(message);
     console.warn(`[Email2Obsidian] ${message}`);
-    if (mode === 'fetch-new' && successes.length) {
-      const nextLog = appendFetchLog(fetchLog, successes);
-      await writeFetchLog(plugin, nextLog);
-    }
+    await ledger.commit({ mode, cutShort: true });
     return {
-      synced: successes.length,
+      synced: accepted,
       skipped,
       errors,
       attachmentErrors,
@@ -193,26 +184,18 @@ export async function runSync(
     };
   }
 
-  if (mode === 'fetch-new') {
-    if (successes.length) {
-      const nextLog = appendFetchLog(fetchLog, successes);
-      const writeLogStart = Date.now();
-      await writeFetchLog(plugin, nextLog);
-      debugLog(`fetch log updated with ${successes.length} entries in ${Date.now() - writeLogStart}ms`);
-    }
-  } else {
-    const nextLog = rewriteFetchLog(successes);
-    const writeLogStart = Date.now();
-    await writeFetchLog(plugin, nextLog);
-    debugLog(`fetch log rewritten with ${successes.length} entries in ${Date.now() - writeLogStart}ms`);
-  }
+  const commitStart = Date.now();
+  await ledger.commit({ mode, cutShort: false });
+  debugLog(
+    `fetch ledger committed (${mode}) with ${accepted} entries in ${Date.now() - commitStart}ms`
+  );
 
   notifier(
-    `Email2Obsidian Sync summary: ${successes.length} added, ${skipped} skipped, ${errors.length} errors, ${attachmentErrors.length} attachment issues.`
+    `Email2Obsidian Sync summary: ${accepted} added, ${skipped} skipped, ${errors.length} errors, ${attachmentErrors.length} attachment issues.`
   );
 
   return {
-    synced: successes.length,
+    synced: accepted,
     skipped,
     errors,
     attachmentErrors,
@@ -220,10 +203,15 @@ export async function runSync(
   };
 }
 
+/**
+ * Walks the newest-first stream of summaries. `stopWhen` is asked, page by
+ * page, whether the scan has reached email this install already knows about;
+ * omit it to read the stream to its end.
+ */
 async function paginateEmails(
   client: E2oClient,
   log?: (msg: string) => void,
-  options: { stopOnLogged?: Set<string> } = {}
+  options: { stopWhen?: (page: EmailSummary[]) => boolean } = {}
 ): Promise<{ emails: EmailSummary[]; stoppedEarly: boolean }> {
   const emails: EmailSummary[] = [];
   let cursor: string | undefined;
@@ -240,9 +228,10 @@ async function paginateEmails(
         Date.now() - pageStart
       }ms`
     );
-    emails.push(...(response.emails || []));
+    const pageEmails = response.emails || [];
+    emails.push(...pageEmails);
 
-    if (options.stopOnLogged && response.emails?.some((e) => options.stopOnLogged?.has(String(e.id)))) {
+    if (options.stopWhen?.(pageEmails)) {
       stoppedEarly = true;
       break;
     }
@@ -251,6 +240,13 @@ async function paginateEmails(
     cursor = response.nextCursor ?? undefined;
     page += 1;
     if (!hasMore) break;
+    if (!cursor) {
+      // hasMore with no cursor would re-request page 0 forever.
+      console.warn(
+        '[Email2Obsidian] The service reported more emails but sent no cursor; stopping the scan here.'
+      );
+      break;
+    }
   }
 
   log?.(

@@ -149,6 +149,67 @@ describe('pipeline runSync', () => {
     expect(text).toContain('tags: [email2obsidian]');
   });
 
+  it('never fetches page 2 when page 1 already holds a logged id', async () => {
+    const vault = new Vault();
+    const plugin = new Plugin(new App(vault));
+    // Email 1 is already in the ledger, so the newest-first scan should stop
+    // on the page that contains it: everything older is known.
+    await plugin.saveData({
+      'fetch-log': { '1': { fetchedAt: '2021-01-01T00:00:00.000Z', filename: 'Old.md' } },
+    });
+
+    const listCalls: (string | null)[] = [];
+
+    const http = createFakeHttp([
+      {
+        pattern: /^\/api\/emails$/,
+        handler: (_request, url) => {
+          listCalls.push(url.searchParams.get('cursor'));
+          return jsonResponse(200, {
+            emails: [
+              { id: 3, subject: 'Newest', createdAt: '2021-01-03 00:00:00', hashtags: [], vault: null },
+              { id: 1, subject: 'Known', createdAt: '2021-01-01 00:00:00', hashtags: [], vault: null },
+            ],
+            hasMore: true,
+            nextCursor: 'page-2',
+          });
+        },
+      },
+      {
+        pattern: /^\/api\/emails\/3$/,
+        handler: () =>
+          jsonResponse(200, {
+            id: 3,
+            subject: 'Newest',
+            createdAt: '2021-01-03 00:00:00',
+            hashtags: [],
+            vault: null,
+            markdownBody: 'Body three, no attachments.',
+            attachments: [],
+          }),
+      },
+    ]);
+    const client = createE2oClient({ apiKey: 'k', http });
+
+    const result = await runSync(
+      {
+        mode: 'fetch-new',
+        settings: { apiKey: 'k', notesFolder: 'Notes' },
+        vault,
+        plugin,
+        client,
+      },
+      () => {}
+    );
+
+    expect(listCalls).toEqual([null]);
+    expect(result.synced).toBe(1);
+    expect(result.skipped).toBe(1);
+
+    const stored = (await plugin.loadData()) as { 'fetch-log'?: Record<string, unknown> };
+    expect(Object.keys(stored['fetch-log'] ?? {}).sort()).toEqual(['1', '3']);
+  });
+
   it('stops on a 429 from getEmail and takes the rate-limited path with a partial log write', async () => {
     const vault = new Vault();
     const plugin = new Plugin(new App(vault));
