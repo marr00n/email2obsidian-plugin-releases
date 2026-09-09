@@ -26,6 +26,12 @@ export interface RenderedMarkdown {
 }
 
 export interface RenderMarkdownOptions {
+  /**
+   * The email's non-inline attachments — the ones that get an Attachments
+   * section entry. Partitioned once by the caller (see `writeEmailNote`);
+   * this function does not re-filter.
+   */
+  nonInlineAttachments: AttachmentMeta[];
   savedPaths?: Record<number, string>;
   inlineSaver: InlineBinarySaver;
 }
@@ -117,7 +123,8 @@ export async function processInlinePlaceholders(
 
 /**
  * Build markdown with frontmatter, body replacements for inline attachments,
- * and a trailing Attachments section for non-inline files.
+ * and a trailing Attachments section for the non-inline files the caller
+ * supplies. Rendering the body can itself save files, via `inlineSaver`.
  */
 export async function renderEmailMarkdown(
   email: EmailDetail,
@@ -131,6 +138,12 @@ export async function renderEmailMarkdown(
     `created: ${email.createdAt}`,
     `tags: [${tags.join(', ')}]`,
     `email2obsidianID: ${email.id}`,
+    // ADR-0002: notes written from now on carry the Vault Marker they arrived
+    // under, so a later cleanup or re-route can work locally. An Unmarked
+    // Email gets no line at all.
+    ...(email.vaultMarker
+      ? [`email2obsidianVault: "${escapeFrontmatter(email.vaultMarker)}"`]
+      : []),
     '---',
   ].join('\n');
 
@@ -150,7 +163,7 @@ export async function renderEmailMarkdown(
         errors: [],
       };
 
-  const nonInline = (email.attachments || []).filter((att) => !att.isInline);
+  const nonInline = options.nonInlineAttachments;
 
   const attachmentSection = nonInline.length
     ? buildAttachmentSection(nonInline, options.savedPaths, fallbackFolder)

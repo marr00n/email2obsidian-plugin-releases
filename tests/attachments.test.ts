@@ -32,7 +32,7 @@ describe('attachments', () => {
       vault,
       fileManager,
       sourcePath: 'Notes/email.md',
-      attachments: [
+      nonInlineAttachments: [
         {
           id: 101,
           fileName: 'photo.jpg',

@@ -7,7 +7,12 @@ export interface SaveAttachmentsOptions {
   vault: Vault;
   fileManager: FileManager;
   sourcePath: string;
-  attachments: AttachmentMeta[];
+  /**
+   * Non-inline attachments only. The caller partitions the email's attachment
+   * list once (see `writeEmailNote`); anything passed here is downloaded and
+   * saved, inline or not.
+   */
+  nonInlineAttachments: AttachmentMeta[];
   logger?: (msg: string) => void;
   /** The Service Client's `downloadAttachment`; credentials live in the client. */
   downloader: DownloadAttachment;
@@ -117,8 +122,10 @@ export async function saveBinaryData(opts: {
 }
 
 /**
- * Download and save non-inline attachments to the vault, collision-proofing filenames.
- * Targets the attachment folder when provided, otherwise the note folder.
+ * Download and save the given (already non-inline) attachments to the vault,
+ * collision-proofing filenames. Targets the attachment folder when provided,
+ * otherwise the note folder. The note at `sourcePath` must already exist —
+ * Obsidian resolves relative attachment locations against it.
  */
 export async function saveAttachments(
   opts: SaveAttachmentsOptions
@@ -126,19 +133,17 @@ export async function saveAttachments(
   const {
     vault,
     fileManager,
-    attachments,
+    nonInlineAttachments,
     sourcePath,
     logger = console.warn,
     downloader,
   } = opts;
 
-  const nonInline = attachments.filter((att) => !att.isInline);
-
   const errors: AttachmentSaveError[] = [];
   const savedPathById: Record<number, string> = {};
 
   const downloads = await runWithConcurrency(
-    nonInline,
+    nonInlineAttachments,
     3,
     async (att, index) => {
       const baseName = buildAttachmentBase({

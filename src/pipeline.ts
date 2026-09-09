@@ -1,16 +1,10 @@
 /* global console */
-import { normalizePath, Notice, Plugin, Vault, TFile } from 'obsidian';
+import { normalizePath, Notice, Plugin, Vault } from 'obsidian';
 import { ApiError, type E2oClient, type EmailSummary } from './api';
 import { openLedger, type SyncMode } from './fetch-ledger';
-import { renderEmailMarkdown } from './helpers';
 import { openNoteNames } from './note-namer';
-import {
-  saveAttachments,
-  SaveAttachmentsResult,
-  ensureFolder,
-  AttachmentSaveError,
-  saveBinaryData,
-} from './attachments';
+import { ensureFolder, AttachmentSaveError } from './attachments';
+import { writeEmailNote, type WriteEmailNoteContext } from './write-email-note';
 import { basename, isRootPath } from './path-utils';
 export interface PipelineSettings {
   apiKey: string;
@@ -81,6 +75,16 @@ export async function runSync(
   const attachmentErrors: AttachmentSaveError[] = [];
   let rateLimitedError: ApiError | null = null;
 
+  const noteContext: WriteEmailNoteContext = {
+    vault,
+    fileManager: plugin.app.fileManager,
+    namer,
+    noteFolder,
+    downloadAttachment: (id, expectedFileName) =>
+      client.downloadAttachment(id, expectedFileName),
+    debugLog,
+  };
+
   await runWithConcurrency(
     selected,
     2,
@@ -95,63 +99,10 @@ export async function runSync(
           })`
         );
 
-        const notePath = namer.reserve(detail.subject, detail.createdAt);
+        const written = await writeEmailNote(noteContext, detail);
+        attachmentErrors.push(...written.attachmentErrors);
 
-        // Create the note before saving attachments so Obsidian can resolve
-        // relative attachment paths ("Same folder as current file", etc.).
-        await writeOrCreateNote(vault, notePath, '');
-
-        const saveStart = Date.now();
-        const savedAttachments: SaveAttachmentsResult = await saveAttachments({
-          vault,
-          fileManager: plugin.app.fileManager,
-          attachments: detail.attachments || [],
-          sourcePath: notePath,
-          logger: (msg) => console.warn(msg),
-          downloader: (id, expectedFileName) =>
-            client.downloadAttachment(id, expectedFileName),
-        });
-        debugLog(
-          `saveAttachments for email ${detail.id} completed in ${Date.now() - saveStart}ms; saved ${
-            Object.keys(savedAttachments.savedPathById).length
-          } attachments`
-        );
-
-        attachmentErrors.push(...savedAttachments.errors);
-
-        const renderStart = Date.now();
-        const renderResult = await renderEmailMarkdown(
-          detail,
-          {
-            noteFolder,
-          },
-          {
-            savedPaths: savedAttachments.savedPathById,
-            inlineSaver: (opts) =>
-              saveBinaryData({
-                vault,
-                fileManager: plugin.app.fileManager,
-                data: opts.data,
-                suggestedName: opts.suggestedName,
-                sourcePath: notePath,
-                mimeType: opts.mimeType,
-              }),
-          }
-        );
-        debugLog(
-          `renderEmailMarkdown for email ${detail.id} in ${Date.now() - renderStart}ms (inline embeds: ${
-            Object.keys(renderResult.inlineEmbeds).length
-          }, inline errors: ${renderResult.inlineErrors.length})`
-        );
-
-        const markdown = renderResult.markdown;
-        attachmentErrors.push(...renderResult.inlineErrors);
-
-        const writeStart = Date.now();
-        await writeOrCreateNote(vault, notePath, markdown);
-        debugLog(`writeOrCreateNote ${notePath || '(root)'} in ${Date.now() - writeStart}ms`);
-
-        ledger.accept(detail.id, basename(notePath));
+        ledger.accept(detail.id, basename(written.notePath));
         accepted += 1;
       } catch (error: unknown) {
         if (error instanceof ApiError && error.code === 'rate-limited') {
@@ -255,19 +206,6 @@ async function paginateEmails(
     }ms`
   );
   return { emails, stoppedEarly };
-}
-
-async function writeOrCreateNote(
-  vault: Vault,
-  path: string,
-  contents: string
-): Promise<void> {
-  const existing = vault.getAbstractFileByPath(path);
-  if (existing instanceof TFile) {
-    await vault.process(existing, () => contents);
-    return;
-  }
-  await vault.create(path, contents);
 }
 
 function createDebugLogger(enabled: boolean): (msg: string) => void {
