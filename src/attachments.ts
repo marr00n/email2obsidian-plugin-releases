@@ -1,8 +1,8 @@
-/* global console */
 import { Vault, TFile, FileManager } from 'obsidian';
 import type { AttachmentMeta, DownloadAttachment } from './api';
 import { basename, extname } from './path-utils';
 import { mapWithConcurrency } from './concurrency';
+import type { SyncReport } from './sync-report';
 
 export interface SaveAttachmentsOptions {
   vault: Vault;
@@ -14,7 +14,8 @@ export interface SaveAttachmentsOptions {
    * saved, inline or not.
    */
   nonInlineAttachments: AttachmentMeta[];
-  logger?: (msg: string) => void;
+  /** Where per-file failures are warned. Use `silentSyncReport()` to say nothing. */
+  report: SyncReport;
   /** The Service Client's `downloadAttachment`; credentials live in the client. */
   downloader: DownloadAttachment;
 }
@@ -136,7 +137,7 @@ export async function saveAttachments(
     fileManager,
     nonInlineAttachments,
     sourcePath,
-    logger = console.warn,
+    report,
     downloader,
   } = opts;
 
@@ -160,7 +161,7 @@ export async function saveAttachments(
         return { att, baseName, downloaded };
       } catch (error) {
         const errObj = toAttachmentSaveError(att, error);
-        logger(`[Email2Obsidian] Attachment ${att.id}: ${errObj.message}`);
+        report.warn(`Attachment ${att.id}: ${errObj.message}`);
         errors.push(errObj);
         return null;
       }
@@ -183,7 +184,7 @@ export async function saveAttachments(
       savedPathById[att.id] = saved.path;
     } catch (error) {
       const errObj = toAttachmentSaveError(att, error);
-      logger(`[Email2Obsidian] Attachment ${att.id}: ${errObj.message}`);
+      report.warn(`Attachment ${att.id}: ${errObj.message}`);
       errors.push(errObj);
     }
   }

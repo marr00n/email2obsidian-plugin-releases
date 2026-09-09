@@ -11,6 +11,7 @@ import {
 import { ApiError, createE2oClient, type E2oClient } from './api';
 import { runSync, SyncMode } from './pipeline';
 import { isRootPath } from './path-utils';
+import { createSyncReport, type SyncReport } from './sync-report';
 
 export type SyncInterval =
   | '5m'
@@ -59,13 +60,18 @@ export default class Email2ObsidianPlugin extends Plugin {
   settings: Email2ObsidianSettings = { ...DEFAULT_SETTINGS };
   private isSyncing = false;
   private intervalHandle: number | null = null;
-  private debugLog = createDebugLogger(false);
-  private client: E2oClient = createE2oClient({ apiKey: '' });
+  /**
+   * The one seam everything under a sync reports through. Rebuilt whenever
+   * settings change so the debug toggle takes effect immediately; the Obsidian
+   * half (`Notice`, `console`) is wired here and nowhere else.
+   */
+  private report: SyncReport = this.makeReport(false);
+  private client: E2oClient = this.makeClient('');
 
   async onload(): Promise<void> {
     await this.loadSettings();
-    this.debugLog = createDebugLogger(this.settings.debugLogging);
-    this.client = createE2oClient({ apiKey: this.settings.apiKey });
+    this.report = this.makeReport(this.settings.debugLogging);
+    this.client = this.makeClient(this.settings.apiKey);
 
     this.addSettingTab(new Email2ObsidianSettingTab(this.app, this));
 
@@ -109,9 +115,9 @@ export default class Email2ObsidianPlugin extends Plugin {
     const prevPeriodic = this.settings.periodicSync;
     const prevApiKey = this.settings.apiKey;
     this.settings = normalizeSettings({ ...this.settings, ...partial });
-    this.debugLog = createDebugLogger(this.settings.debugLogging);
+    this.report = this.makeReport(this.settings.debugLogging);
     if (this.settings.apiKey !== prevApiKey) {
-      this.client = createE2oClient({ apiKey: this.settings.apiKey });
+      this.client = this.makeClient(this.settings.apiKey);
     }
     await this.saveSettings();
     const shouldRunImmediately =
@@ -119,48 +125,63 @@ export default class Email2ObsidianPlugin extends Plugin {
     this.setupScheduler(shouldRunImmediately);
   }
 
+  private makeReport(debugEnabled: boolean): SyncReport {
+    return createSyncReport({
+      showNotice: (msg) => {
+        new Notice(msg);
+      },
+      debugEnabled,
+    });
+  }
+
+  /**
+   * The client warns through whichever report is current — the arrow reads
+   * `this.report` at call time, so rebuilding the report does not strand it.
+   */
+  private makeClient(apiKey: string): E2oClient {
+    return createE2oClient({
+      apiKey,
+      warn: (msg) => this.report.warn(msg),
+    });
+  }
+
   private async handleSync(mode: SyncMode) {
     if (this.isSyncing) {
-      this.debugLog('handleSync ignored: already syncing');
-      new Notice('A sync is already in progress.');
+      this.report.debug('handleSync ignored: already syncing');
+      this.report.notice('A sync is already in progress.');
       return;
     }
 
     const runStart = Date.now();
     this.isSyncing = true;
     try {
-      const result = await runSync(
-        {
-          mode,
-          settings: this.settings,
-          vault: this.app.vault,
-          plugin: this,
-          client: this.client,
-        },
-        (msg) => new Notice(msg)
-      );
+      const result = await runSync({
+        mode,
+        settings: this.settings,
+        vault: this.app.vault,
+        plugin: this,
+        client: this.client,
+        report: this.report,
+      });
 
       this.settings.lastRunAt = new Date().toISOString();
       await this.saveSettings();
 
-      this.debugLog(
+      this.report.debug(
         `handleSync completed in ${Date.now() - runStart}ms; errors=${result.errors.length}, attachmentErrors=${result.attachmentErrors.length}`
       );
 
       if (result.errors.length) {
-        console.warn(
-          '[Email2Obsidian] Sync finished with errors:',
-          result.errors
-        );
+        this.report.warn('Sync finished with errors:', result.errors);
       }
       if (result.attachmentErrors.length) {
-        console.warn('[Email2Obsidian] Attachment issues:', result.attachmentErrors);
+        this.report.warn('Attachment issues:', result.attachmentErrors);
       }
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Unknown sync error.';
-      new Notice(`Sync didn't finish: ${message}`);
-      console.warn('[Email2Obsidian] Sync failed', error);
+      this.report.notice(`Sync didn't finish: ${message}`);
+      this.report.warn('Sync failed', error);
     } finally {
       this.isSyncing = false;
     }
@@ -169,26 +190,26 @@ export default class Email2ObsidianPlugin extends Plugin {
   private setupScheduler(triggerImmediate = false) {
     if (this.intervalHandle) {
       window.clearInterval(this.intervalHandle);
-      this.debugLog('Cleared existing sync interval');
+      this.report.debug('Cleared existing sync interval');
       this.intervalHandle = null;
     }
 
     if (!this.settings.periodicSync) {
-      this.debugLog('Periodic sync disabled; scheduler not started');
+      this.report.debug('Periodic sync disabled; scheduler not started');
       return;
     }
 
     const delay = syncIntervalToMs(this.settings.syncInterval);
 
     if (triggerImmediate) {
-      this.debugLog('Triggering immediate sync on scheduler start');
+      this.report.debug('Triggering immediate sync on scheduler start');
       void this.handleSync('fetch-new');
     }
 
     this.intervalHandle = window.setInterval(() => {
       void this.handleSync('fetch-new');
     }, delay);
-    this.debugLog(`Scheduled periodic sync every ${delay}ms`);
+    this.report.debug(`Scheduled periodic sync every ${delay}ms`);
   }
 
   onunload(): void {
@@ -424,13 +445,6 @@ function normalizeSettings(raw: unknown): Email2ObsidianSettings {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
-}
-
-function createDebugLogger(enabled: boolean): (msg: string) => void {
-  if (!enabled) {
-    return () => {};
-  }
-  return (msg: string) => console.debug(`[Email2Obsidian][debug] ${msg}`);
 }
 
 function normalizeFolder(

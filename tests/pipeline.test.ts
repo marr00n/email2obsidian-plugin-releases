@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 
 import { runSync } from '../src/pipeline';
 import { createE2oClient } from '../src/api';
+import { createSyncReport } from '../src/sync-report';
 import { Vault, Plugin, App, TFile } from 'obsidian';
 import { createFakeHttp, jsonResponse, binaryResponse } from './fake-http';
 
@@ -69,16 +70,13 @@ describe('pipeline runSync', () => {
     ]);
     const client = createE2oClient({ apiKey: 'k', http });
 
-    const result = await runSync(
-      {
-        mode: 'fetch-new',
-        settings: { apiKey: 'k', notesFolder: 'Notes' },
-        vault,
-        plugin,
-        client,
-      },
-      () => {}
-    );
+    const result = await runSync({
+      mode: 'fetch-new',
+      settings: { apiKey: 'k', notesFolder: 'Notes' },
+      vault,
+      plugin,
+      client,
+    });
 
     expect(result.attachmentErrors).toHaveLength(0);
     expect(result.errors).toHaveLength(0);
@@ -131,16 +129,13 @@ describe('pipeline runSync', () => {
     ]);
     const client = createE2oClient({ apiKey: 'k', http });
 
-    const result = await runSync(
-      {
-        mode: 'fetch-new',
-        settings: { apiKey: 'k', notesFolder: 'Notes' },
-        vault,
-        plugin,
-        client,
-      },
-      () => {}
-    );
+    const result = await runSync({
+      mode: 'fetch-new',
+      settings: { apiKey: 'k', notesFolder: 'Notes' },
+      vault,
+      plugin,
+      client,
+    });
 
     expect(result.errors).toHaveLength(0);
     expect(result.synced).toBe(1);
@@ -191,16 +186,13 @@ describe('pipeline runSync', () => {
     ]);
     const client = createE2oClient({ apiKey: 'k', http });
 
-    const result = await runSync(
-      {
-        mode: 'fetch-new',
-        settings: { apiKey: 'k', notesFolder: 'Notes' },
-        vault,
-        plugin,
-        client,
-      },
-      () => {}
-    );
+    const result = await runSync({
+      mode: 'fetch-new',
+      settings: { apiKey: 'k', notesFolder: 'Notes' },
+      vault,
+      plugin,
+      client,
+    });
 
     expect(listCalls).toEqual([null]);
     expect(result.synced).toBe(1);
@@ -248,19 +240,21 @@ describe('pipeline runSync', () => {
 
     const notices: string[] = [];
 
-    const result = await runSync(
-      {
-        mode: 'fetch-new',
-        settings: { apiKey: 'k', notesFolder: 'Notes' },
-        vault,
-        plugin,
-        client,
-      },
-      (msg) => notices.push(msg)
-    );
+    const result = await runSync({
+      mode: 'fetch-new',
+      settings: { apiKey: 'k', notesFolder: 'Notes' },
+      vault,
+      plugin,
+      client,
+      report: createSyncReport({
+        showNotice: (msg) => notices.push(msg),
+        debugEnabled: false,
+      }),
+    });
 
-    expect(result.rateLimited).toBe(true);
     expect(result.synced).toBe(1);
+    // The rate-limited path is what the user is told about: the run's only
+    // notice is the rate-limit warning, not the usual sync summary.
     expect(notices).toHaveLength(1);
     expect(notices[0]).toMatch(/rate limit/i);
 

@@ -131,11 +131,19 @@ export interface E2oClientOptions {
   apiKey: string;
   /** Defaults to Obsidian's `requestUrl`; injectable for tests. */
   http?: HttpAdapter;
+  /**
+   * Where transport and payload complaints go — pass a `SyncReport`'s `warn`
+   * to route them through the sync's reporting seam. Messages arrive bare; the
+   * default adds the plugin prefix itself so a client built without a report
+   * still logs exactly as it always has.
+   */
+  warn?: (msg: string) => void;
 }
 
 export function createE2oClient({
   apiKey,
   http = requestUrl,
+  warn = defaultWarn,
 }: E2oClientOptions): E2oClient {
   async function listEmails(
     params: EmailListRequest = {}
@@ -147,27 +155,27 @@ export function createE2oClient({
     if (params.search) url.searchParams.set('search', params.search);
 
     const context = 'GET /api/emails';
-    const response = await safeFetch(http, url.toString(), apiKey, context);
-    const data = parseJson(response, context);
+    const response = await safeFetch(http, url.toString(), apiKey, context, warn);
+    const data = parseJson(response, context, warn);
 
     if (!isEmailListPayload(data)) {
       throw new ApiError('bad-response', `${context} returned an unexpected shape.`);
     }
 
-    return toEmailListResponse(data);
+    return toEmailListResponse(data, warn);
   }
 
   async function getEmail(id: number): Promise<EmailDetail> {
     const url = new URL(`api/emails/${id}`, EMAIL2OBSIDIAN_API_BASE);
     const context = 'GET /api/emails/:id';
-    const response = await safeFetch(http, url.toString(), apiKey, context);
-    const data = parseJson(response, context);
+    const response = await safeFetch(http, url.toString(), apiKey, context, warn);
+    const data = parseJson(response, context, warn);
 
     if (!isEmailDetailPayload(data)) {
       throw new ApiError('bad-response', `${context} returned an unexpected shape.`);
     }
 
-    return toEmailDetail(data);
+    return toEmailDetail(data, warn);
   }
 
   async function downloadAttachment(
@@ -179,7 +187,8 @@ export function createE2oClient({
       http,
       url.toString(),
       apiKey,
-      'GET /api/attachments/:id/download'
+      'GET /api/attachments/:id/download',
+      warn
     );
 
     const disposition = getHeader(response.headers, 'content-disposition');
@@ -207,11 +216,16 @@ export function createE2oClient({
  * Transport plumbing
  * ---------------------------------------------------------------------- */
 
+function defaultWarn(msg: string): void {
+  console.warn(`[Email2Obsidian] ${msg}`);
+}
+
 async function safeFetch(
   http: HttpAdapter,
   url: string,
   apiKey: string,
-  context: string
+  context: string,
+  warn: (msg: string) => void
 ): Promise<HttpResponse> {
   let response: HttpResponse;
   try {
@@ -224,25 +238,29 @@ async function safeFetch(
     });
   } catch (error) {
     const message = `${context} failed: ${(error as Error).message}`;
-    console.warn(`[Email2Obsidian] ${message}`);
+    warn(message);
     throw new ApiError('network', message);
   }
 
   if (response.status < 200 || response.status >= 300) {
     const friendly = friendlyErrorMessage(response.status, context);
-    console.warn(`[Email2Obsidian] ${friendly}`);
+    warn(friendly);
     throw new ApiError(mapStatusToCode(response.status), friendly, response.status);
   }
 
   return response;
 }
 
-function parseJson(response: HttpResponse, context: string): unknown {
+function parseJson(
+  response: HttpResponse,
+  context: string,
+  warn: (msg: string) => void
+): unknown {
   try {
     return JSON.parse(response.text);
   } catch {
     const message = `${context} returned non-JSON response.`;
-    console.warn(`[Email2Obsidian] ${message}`);
+    warn(message);
     throw new ApiError('bad-response', message, response.status);
   }
 }
@@ -336,7 +354,10 @@ function isEmailDetailPayload(data: unknown): data is WireEmailDetailPayload {
   return true;
 }
 
-function toEmailListResponse(payload: WireEmailListPayload): EmailListResponse {
+function toEmailListResponse(
+  payload: WireEmailListPayload,
+  warn: (msg: string) => void
+): EmailListResponse {
   const emails: EmailSummary[] = [];
   for (const entry of payload.emails) {
     const summary = toEmailSummary(entry);
@@ -344,7 +365,7 @@ function toEmailListResponse(payload: WireEmailListPayload): EmailListResponse {
       emails.push(summary);
       continue;
     }
-    console.warn('[Email2Obsidian] GET /api/emails: skipped an unusable email entry.');
+    warn('GET /api/emails: skipped an unusable email entry.');
   }
 
   return {
@@ -370,7 +391,10 @@ function toEmailSummary(entry: unknown): EmailSummary | null {
   };
 }
 
-function toEmailDetail(payload: WireEmailDetailPayload): EmailDetail {
+function toEmailDetail(
+  payload: WireEmailDetailPayload,
+  warn: (msg: string) => void
+): EmailDetail {
   const attachments: AttachmentMeta[] = [];
   for (const entry of payload.attachments) {
     const attachment = toAttachmentMeta(entry);
@@ -378,9 +402,7 @@ function toEmailDetail(payload: WireEmailDetailPayload): EmailDetail {
       attachments.push(attachment);
       continue;
     }
-    console.warn(
-      `[Email2Obsidian] GET /api/emails/${payload.id}: skipped an unusable attachment entry.`
-    );
+    warn(`GET /api/emails/${payload.id}: skipped an unusable attachment entry.`);
   }
 
   const detail: EmailDetail = {

@@ -1,5 +1,4 @@
-/* global console */
-import { Notice, Plugin, Vault } from 'obsidian';
+import { Plugin, Vault } from 'obsidian';
 import { ApiError, type E2oClient, type EmailSummary } from './api';
 import { openLedger, type SyncMode } from './fetch-ledger';
 import { openNoteNames } from './note-namer';
@@ -8,10 +7,11 @@ import { writeEmailNote, type WriteEmailNoteContext } from './write-email-note';
 import { resolveNoteFolder } from './note-folder';
 import { basename } from './path-utils';
 import { mapWithConcurrency } from './concurrency';
+import { silentSyncReport, type SyncReport } from './sync-report';
+
 export interface PipelineSettings {
   apiKey: string;
   notesFolder: string;
-  debugLogging?: boolean;
 }
 
 export type { SyncMode };
@@ -23,6 +23,12 @@ export interface SyncOptions {
   plugin: Plugin;
   /** The Service Client to read through; it already holds the API key. */
   client: E2oClient;
+  /**
+   * Where this run's toasts, warnings and debug lines go. Omit it and the run
+   * says nothing at all — which is what a test wants, and never what the
+   * plugin wants, so `main.ts` always supplies one.
+   */
+  report?: SyncReport;
 }
 
 export interface SyncResult {
@@ -30,7 +36,6 @@ export interface SyncResult {
   skipped: number;
   errors: string[];
   attachmentErrors: AttachmentSaveError[];
-  rateLimited: boolean;
 }
 
 /** What one worker's attempt at a single email came out as. */
@@ -39,12 +44,9 @@ type EmailSyncOutcome =
   | { status: 'error'; message: string }
   | { status: 'rate-limited' };
 
-export async function runSync(
-  opts: SyncOptions,
-  notifier: (msg: string) => void = (msg) => new Notice(msg)
-): Promise<SyncResult> {
+export async function runSync(opts: SyncOptions): Promise<SyncResult> {
   const { settings, vault, plugin, mode, client } = opts;
-  const debugLog = createDebugLogger(Boolean(settings.debugLogging));
+  const report = opts.report ?? silentSyncReport();
   if (!settings.apiKey.trim()) {
     throw new Error('Add your Email2Obsidian API key in Settings before syncing.');
   }
@@ -53,11 +55,11 @@ export async function runSync(
 
   const namerStart = Date.now();
   const namer = await openNoteNames(vault, noteFolder.path);
-  debugLog(`openNoteNames in ${Date.now() - namerStart}ms`);
+  report.debug(`openNoteNames in ${Date.now() - namerStart}ms`);
 
   const ledger = await openLedger(plugin);
 
-  const { emails: emailSummaries, stoppedEarly } = await paginateEmails(client, debugLog, {
+  const { emails: emailSummaries, stoppedEarly } = await paginateEmails(client, report, {
     // fetch-all wants the whole stream; only fetch-new leans on the ledger's
     // contiguity to stop scanning.
     stopWhen:
@@ -69,7 +71,7 @@ export async function runSync(
     : emailSummaries.filter((email) => !ledger.hasSeen(email.id));
 
   const skipped = mode === 'fetch-new' ? emailSummaries.length - selected.length : 0;
-  debugLog(
+  report.debug(
     `selection: mode=${mode}, total summaries=${emailSummaries.length}, selected=${selected.length}, skipped=${skipped}, stoppedEarly=${stoppedEarly}`
   );
 
@@ -80,7 +82,7 @@ export async function runSync(
     noteFolder: noteFolder.path,
     downloadAttachment: (id, expectedFileName) =>
       client.downloadAttachment(id, expectedFileName),
-    debugLog,
+    report,
   };
 
   // Flipped by a worker the instant it hits a 429; read back by the pool
@@ -95,7 +97,7 @@ export async function runSync(
       try {
         const fetchStart = Date.now();
         const detail = await client.getEmail(summary.id);
-        debugLog(
+        report.debug(
           `getEmail ${summary.id} fetched in ${Date.now() - fetchStart}ms (attachments: ${
             detail.attachments?.length ?? 0
           })`
@@ -113,7 +115,7 @@ export async function runSync(
           error instanceof Error
             ? error.message
             : 'Something went wrong syncing an email.';
-        console.warn(`[Email2Obsidian] ${message}`);
+        report.warn(message);
         return { status: 'error', message };
       }
     },
@@ -138,35 +140,23 @@ export async function runSync(
   if (rateLimited) {
     const message =
       "You've hit the rate limit. Please wait a bit or lower the sync frequency.";
-    notifier(message);
-    console.warn(`[Email2Obsidian] ${message}`);
+    report.notice(message);
+    report.warn(message);
     await ledger.commit({ mode, cutShort: true });
-    return {
-      synced: accepted,
-      skipped,
-      errors,
-      attachmentErrors,
-      rateLimited: true,
-    };
+    return { synced: accepted, skipped, errors, attachmentErrors };
   }
 
   const commitStart = Date.now();
   await ledger.commit({ mode, cutShort: false });
-  debugLog(
+  report.debug(
     `fetch ledger committed (${mode}) with ${accepted} entries in ${Date.now() - commitStart}ms`
   );
 
-  notifier(
+  report.notice(
     `Email2Obsidian Sync summary: ${accepted} added, ${skipped} skipped, ${errors.length} errors, ${attachmentErrors.length} attachment issues.`
   );
 
-  return {
-    synced: accepted,
-    skipped,
-    errors,
-    attachmentErrors,
-    rateLimited: false,
-  };
+  return { synced: accepted, skipped, errors, attachmentErrors };
 }
 
 /**
@@ -176,7 +166,7 @@ export async function runSync(
  */
 async function paginateEmails(
   client: E2oClient,
-  log?: (msg: string) => void,
+  report: SyncReport,
   options: { stopWhen?: (page: EmailSummary[]) => boolean } = {}
 ): Promise<{ emails: EmailSummary[]; stoppedEarly: boolean }> {
   const emails: EmailSummary[] = [];
@@ -189,7 +179,7 @@ async function paginateEmails(
   while (hasMore) {
     const pageStart = Date.now();
     const response = await client.listEmails({ cursor, sort: 'date-desc' });
-    log?.(
+    report.debug(
       `paginateEmails page ${page} fetched ${response.emails?.length ?? 0} in ${
         Date.now() - pageStart
       }ms`
@@ -208,26 +198,17 @@ async function paginateEmails(
     if (!hasMore) break;
     if (!cursor) {
       // hasMore with no cursor would re-request page 0 forever.
-      console.warn(
-        '[Email2Obsidian] The service reported more emails but sent no cursor; stopping the scan here.'
+      report.warn(
+        'The service reported more emails but sent no cursor; stopping the scan here.'
       );
       break;
     }
   }
 
-  log?.(
+  report.debug(
     `paginateEmails completed ${emails.length} emails across ${page} pages in ${
       Date.now() - started
     }ms`
   );
   return { emails, stoppedEarly };
-}
-
-function createDebugLogger(enabled: boolean): (msg: string) => void {
-  if (!enabled) {
-    return () => {};
-  }
-  return (msg: string) => {
-    console.debug(`[Email2Obsidian][debug] ${msg}`);
-  };
 }
