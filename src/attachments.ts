@@ -1,7 +1,7 @@
 /* global console */
-import { Vault, TFile, FileManager, normalizePath } from 'obsidian';
+import { Vault, TFile, FileManager } from 'obsidian';
 import type { AttachmentMeta, DownloadAttachment } from './api';
-import { basename, extname, isRootPath } from './path-utils';
+import { basename, extname } from './path-utils';
 import { mapWithConcurrency } from './concurrency';
 
 export interface SaveAttachmentsOptions {
@@ -189,21 +189,6 @@ export async function saveAttachments(
   }
 
   return { errors, savedPathById };
-}
-
-export async function ensureFolder(vault: Vault, folder: string): Promise<void> {
-  if (!folder || isRootPath(folder)) {
-    return;
-  }
-  const normalized = normalizePath(folder);
-  try {
-    await vault.createFolder(normalized);
-  } catch (error) {
-    // createFolder throws if exists; ignore that case.
-    if (!(error instanceof Error && /exist/i.test(error.message))) {
-      throw error;
-    }
-  }
 }
 
 function sanitizeAttachmentName(name: string, id?: number): string {

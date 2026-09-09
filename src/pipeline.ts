@@ -1,11 +1,12 @@
 /* global console */
-import { normalizePath, Notice, Plugin, Vault } from 'obsidian';
+import { Notice, Plugin, Vault } from 'obsidian';
 import { ApiError, type E2oClient, type EmailSummary } from './api';
 import { openLedger, type SyncMode } from './fetch-ledger';
 import { openNoteNames } from './note-namer';
-import { ensureFolder, AttachmentSaveError } from './attachments';
+import { AttachmentSaveError } from './attachments';
 import { writeEmailNote, type WriteEmailNoteContext } from './write-email-note';
-import { basename, isRootPath } from './path-utils';
+import { resolveNoteFolder } from './note-folder';
+import { basename } from './path-utils';
 import { mapWithConcurrency } from './concurrency';
 export interface PipelineSettings {
   apiKey: string;
@@ -48,15 +49,10 @@ export async function runSync(
     throw new Error('Add your Email2Obsidian API key in Settings before syncing.');
   }
 
-  const rawNoteFolder = settings.notesFolder ?? '';
-  const noteFolderIsRoot = isRootPath(rawNoteFolder);
-  const noteFolder = noteFolderIsRoot ? '' : normalizePath(rawNoteFolder);
-  if (!noteFolderIsRoot) {
-    await ensureFolder(vault, noteFolder);
-  }
+  const noteFolder = await resolveNoteFolder(vault, settings.notesFolder ?? '');
 
   const namerStart = Date.now();
-  const namer = await openNoteNames(vault, noteFolder);
+  const namer = await openNoteNames(vault, noteFolder.path);
   debugLog(`openNoteNames in ${Date.now() - namerStart}ms`);
 
   const ledger = await openLedger(plugin);
@@ -81,7 +77,7 @@ export async function runSync(
     vault,
     fileManager: plugin.app.fileManager,
     namer,
-    noteFolder,
+    noteFolder: noteFolder.path,
     downloadAttachment: (id, expectedFileName) =>
       client.downloadAttachment(id, expectedFileName),
     debugLog,

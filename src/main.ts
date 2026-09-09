@@ -10,6 +10,7 @@ import {
 } from 'obsidian';
 import { ApiError, createE2oClient, type E2oClient } from './api';
 import { runSync, SyncMode } from './pipeline';
+import { isRootPath } from './path-utils';
 
 export type SyncInterval =
   | '5m'
@@ -441,8 +442,12 @@ function normalizeFolder(
   if (!trimmed.length) {
     return options.allowRoot ? '' : null;
   }
-  if (options.allowRoot && trimmed === '.') {
-    return '.';
+  // Only '.' can reach here (the empty case is handled above), so this is
+  // the same root check note-folder.ts resolves against at sync time —
+  // reused here just to recognize it, not to convert it: settings persist
+  // '.' as typed, and note-folder.ts is the one place that turns it into ''.
+  if (options.allowRoot && isRootPath(trimmed)) {
+    return trimmed;
   }
   try {
     return normalizePath(trimmed);

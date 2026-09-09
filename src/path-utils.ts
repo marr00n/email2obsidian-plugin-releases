@@ -39,15 +39,6 @@ export function extname(filePath: string): string {
   return base.slice(index);
 }
 
-export function dirname(filePath: string): string {
-  const normalized = normalizeSlashes(filePath).replace(/\/+$/g, '');
-  const index = normalized.lastIndexOf('/');
-  if (index === -1) {
-    return '';
-  }
-  return normalized.slice(0, index);
-}
-
 export function isRootPath(value: string | null | undefined): boolean {
   if (value == null) {
     return false;
