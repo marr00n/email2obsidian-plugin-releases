@@ -6,9 +6,9 @@
 
 ## Releases
 
-- Every push to main MUST be accompanied by a version tag (e.g., `git tag 3.1.1 && git push origin main && git push origin 3.1.1`).
-- Every commit must have a meaningful commit message — if the user hasn't provided one, suggest one, and prompt them for to agree or edit it before committing.
-- The release workflow uses the commit message as the release body. Missing or empty commit messages result in releases with no description, which harms the plugin's health rating.
+- A release happens ONLY when a version tag is pushed — pushes to main alone never release or deploy anything. Tag only when a release is intended (e.g., `git tag 3.2.0 && git push origin 3.2.0`), and bump `package.json`/`manifest.json` to match in the tagged commit.
+- The tagged commit's message becomes the release body, so the tagged commit should carry a message that reads as release notes (e.g. "Release 3.2.0: …"). Missing or empty messages produce releases with no description, which harms the plugin's health rating.
+- Every commit must have a meaningful commit message — if the user hasn't provided one, suggest one, and prompt them to agree or edit it before committing.
 
   ## Server Behaviour
   - The Email2Obsidian service retains a received email for **72 hours**, then deletes it. The plugin holds the durable copy; the server is a short-lived queue, not a store.
