@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 import { runSync } from '../src/pipeline';
 import { createE2oClient } from '../src/api';
+import { createSyncReport } from '../src/sync-report';
 import { Vault, Plugin, App, TFile } from 'obsidian';
 import { createFakeHttp, jsonResponse, binaryResponse } from './fake-http';
 
@@ -69,16 +70,13 @@ describe('pipeline runSync', () => {
     ]);
     const client = createE2oClient({ apiKey: 'k', http });
 
-    const result = await runSync(
-      {
-        mode: 'fetch-new',
-        settings: { apiKey: 'k', notesFolder: 'Notes' },
-        vault,
-        plugin,
-        client,
-      },
-      () => {}
-    );
+    const result = await runSync({
+      mode: 'fetch-new',
+      settings: { apiKey: 'k', notesFolder: 'Notes' },
+      vault,
+      plugin,
+      client,
+    });
 
     expect(result.attachmentErrors).toHaveLength(0);
     expect(result.errors).toHaveLength(0);
@@ -131,16 +129,13 @@ describe('pipeline runSync', () => {
     ]);
     const client = createE2oClient({ apiKey: 'k', http });
 
-    const result = await runSync(
-      {
-        mode: 'fetch-new',
-        settings: { apiKey: 'k', notesFolder: 'Notes' },
-        vault,
-        plugin,
-        client,
-      },
-      () => {}
-    );
+    const result = await runSync({
+      mode: 'fetch-new',
+      settings: { apiKey: 'k', notesFolder: 'Notes' },
+      vault,
+      plugin,
+      client,
+    });
 
     expect(result.errors).toHaveLength(0);
     expect(result.synced).toBe(1);
@@ -191,16 +186,13 @@ describe('pipeline runSync', () => {
     ]);
     const client = createE2oClient({ apiKey: 'k', http });
 
-    const result = await runSync(
-      {
-        mode: 'fetch-new',
-        settings: { apiKey: 'k', notesFolder: 'Notes' },
-        vault,
-        plugin,
-        client,
-      },
-      () => {}
-    );
+    const result = await runSync({
+      mode: 'fetch-new',
+      settings: { apiKey: 'k', notesFolder: 'Notes' },
+      vault,
+      plugin,
+      client,
+    });
 
     expect(listCalls).toEqual([null]);
     expect(result.synced).toBe(1);
@@ -248,19 +240,21 @@ describe('pipeline runSync', () => {
 
     const notices: string[] = [];
 
-    const result = await runSync(
-      {
-        mode: 'fetch-new',
-        settings: { apiKey: 'k', notesFolder: 'Notes' },
-        vault,
-        plugin,
-        client,
-      },
-      (msg) => notices.push(msg)
-    );
+    const result = await runSync({
+      mode: 'fetch-new',
+      settings: { apiKey: 'k', notesFolder: 'Notes' },
+      vault,
+      plugin,
+      client,
+      report: createSyncReport({
+        showNotice: (msg) => notices.push(msg),
+        debugEnabled: false,
+      }),
+    });
 
-    expect(result.rateLimited).toBe(true);
     expect(result.synced).toBe(1);
+    // The rate-limited path is what the user is told about: the run's only
+    // notice is the rate-limit warning, not the usual sync summary.
     expect(notices).toHaveLength(1);
     expect(notices[0]).toMatch(/rate limit/i);
 
@@ -269,5 +263,67 @@ describe('pipeline runSync', () => {
     const stored = (await plugin.loadData()) as { 'fetch-log'?: Record<string, unknown> };
     expect(stored['fetch-log']).toHaveProperty('1');
     expect(stored['fetch-log']).not.toHaveProperty('2');
+  });
+
+  it('stops the scan instead of looping forever when hasMore is true but no cursor is sent', async () => {
+    const vault = new Vault();
+    const plugin = new Plugin(new App(vault));
+
+    let listCalls = 0;
+
+    const http = createFakeHttp([
+      {
+        pattern: /^\/api\/emails$/,
+        handler: () => {
+          listCalls += 1;
+          return jsonResponse(200, {
+            emails: [
+              { id: 1, subject: 'Only page', createdAt: '2021-01-01 00:00:00', hashtags: [], vault: null },
+            ],
+            // A server bug: more claimed to exist, but no cursor to fetch it with.
+            hasMore: true,
+            nextCursor: null,
+          });
+        },
+      },
+      {
+        pattern: /^\/api\/emails\/1$/,
+        handler: () =>
+          jsonResponse(200, {
+            id: 1,
+            subject: 'Only page',
+            createdAt: '2021-01-01 00:00:00',
+            hashtags: [],
+            vault: null,
+            markdownBody: 'Body, no attachments.',
+            attachments: [],
+          }),
+      },
+    ]);
+    const client = createE2oClient({ apiKey: 'k', http });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // fetch-all: paginateEmails runs with no stopWhen, so this exercises the
+    // pagination loop itself rather than the ledger's early-stop.
+    const result = await runSync({
+      mode: 'fetch-all',
+      settings: { apiKey: 'k', notesFolder: 'Notes' },
+      vault,
+      plugin,
+      client,
+      report: createSyncReport({ showNotice: () => {}, debugEnabled: false }),
+    });
+
+    // Completes rather than hanging, having fetched only the one page.
+    expect(listCalls).toBe(1);
+    expect(result.synced).toBe(1);
+    expect(result.errors).toHaveLength(0);
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('reported more emails but sent no cursor')
+    );
+
+    warnSpy.mockRestore();
   });
 });

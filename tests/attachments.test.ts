@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { saveAttachments, saveBinaryData } from '../src/attachments';
 import { Vault, FileManager } from 'obsidian';
+import { silentSyncReport } from '../src/sync-report';
 
 function toArrayBuffer(text: string): ArrayBuffer {
   return new TextEncoder().encode(text).buffer;
@@ -42,6 +43,7 @@ describe('attachments', () => {
           isInline: false,
         },
       ],
+      report: silentSyncReport(),
       downloader: async (_id, expectedName) => ({
         data: toArrayBuffer('image'),
         mimeType: 'image/jpeg',

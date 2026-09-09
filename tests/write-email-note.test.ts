@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { App, Plugin, TFile, Vault } from 'obsidian';
 import { writeEmailNote, type WriteEmailNoteContext } from '../src/write-email-note';
 import { openNoteNames } from '../src/note-namer';
+import { silentSyncReport } from '../src/sync-report';
 import type { AttachmentMeta, EmailDetail } from '../src/api';
 
 const NOTE_FOLDER = 'Notes';
@@ -65,6 +66,7 @@ async function makeContext(
         fileName: expectedFileName ?? `attachment-${id}`,
       };
     },
+    report: silentSyncReport(),
   };
 
   return { ctx, vault };

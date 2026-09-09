@@ -1,6 +1,6 @@
-/* global console */
 import { TFile, TFolder, Vault } from 'obsidian';
 import { joinPosix } from './path-utils';
+import { prefixedWarn } from './sync-report';
 
 /**
  * Owns the question "which filename does an email-derived note get?".
@@ -21,12 +21,27 @@ export interface NoteNamer {
   reserve(subject: string, createdAt: string): string;
 }
 
+export interface OpenNoteNamesOptions {
+  /**
+   * Where a scan failure is reported. Defaults to the same prefixed
+   * `console.warn` this has always used, so callers that don't pass one see
+   * no change; `runSync` passes `report.warn` so the failure narrates
+   * through the sync's one seam instead.
+   */
+  warn?: (msg: string, ...details: unknown[]) => void;
+}
+
 /**
  * Open a NoteNamer over `folder` (empty string means the Obsidian Vault root),
  * taking the one-time snapshot of the note names already in it.
  */
-export async function openNoteNames(vault: Vault, folder: string): Promise<NoteNamer> {
-  const taken = scanFileNames(vault, folder);
+export async function openNoteNames(
+  vault: Vault,
+  folder: string,
+  options: OpenNoteNamesOptions = {}
+): Promise<NoteNamer> {
+  const warn = options.warn ?? prefixedWarn;
+  const taken = scanFileNames(vault, folder, warn);
 
   return {
     reserve(subject: string, createdAt: string): string {
@@ -50,7 +65,11 @@ export async function openNoteNames(vault: Vault, folder: string): Promise<NoteN
  * on large Obsidian Vaults. Notes only ever land directly in `folder`, so a
  * deeper scan would cost more without changing a single name.
  */
-function scanFileNames(vault: Vault, folder: string): Set<string> {
+function scanFileNames(
+  vault: Vault,
+  folder: string,
+  warn: (msg: string, ...details: unknown[]) => void
+): Set<string> {
   const names = new Set<string>();
   try {
     const target = folder.length ? vault.getAbstractFileByPath(folder) : vault.getRoot();
@@ -64,8 +83,8 @@ function scanFileNames(vault: Vault, folder: string): Set<string> {
     }
   } catch (error: unknown) {
     // A missing folder is not fatal: it gets created before any note is written.
-    console.warn(
-      `[Email2Obsidian] Unable to list folder ${
+    warn(
+      `Unable to list folder ${
         folder.length ? folder : 'vault root'
       }: ${(error as Error).message}`
     );

@@ -7,6 +7,7 @@ import {
 } from './attachments';
 import { renderEmailMarkdown } from './helpers';
 import type { NoteNamer } from './note-namer';
+import type { SyncReport } from './sync-report';
 
 /** What one email-to-note job needs from its caller. */
 export interface WriteEmailNoteContext {
@@ -18,8 +19,11 @@ export interface WriteEmailNoteContext {
   noteFolder: string;
   /** The Service Client's `downloadAttachment`; credentials live in the client. */
   downloadAttachment: DownloadAttachment;
-  /** Optional sink for timing/count diagnostics. */
-  debugLog?: (msg: string) => void;
+  /**
+   * Where this job's diagnostics and per-file warnings go — passed straight
+   * through to `saveAttachments`. Use `silentSyncReport()` to say nothing.
+   */
+  report: SyncReport;
 }
 
 export interface WriteEmailNoteResult {
@@ -65,8 +69,7 @@ export async function writeEmailNote(
   ctx: WriteEmailNoteContext,
   detail: EmailDetail
 ): Promise<WriteEmailNoteResult> {
-  const { vault, fileManager, namer, noteFolder, downloadAttachment } = ctx;
-  const debugLog = ctx.debugLog ?? (() => {});
+  const { vault, fileManager, namer, noteFolder, downloadAttachment, report } = ctx;
 
   // Partition once, here. `saveAttachments` takes the non-inline files;
   // `renderEmailMarkdown` lists those same files in the Attachments section.
@@ -88,8 +91,9 @@ export async function writeEmailNote(
     nonInlineAttachments: nonInline,
     sourcePath: notePath,
     downloader: downloadAttachment,
+    report,
   });
-  debugLog(
+  report.debug(
     `saveAttachments for email ${detail.id} completed in ${Date.now() - saveStart}ms; saved ${
       Object.keys(savedAttachments.savedPathById).length
     } of ${nonInline.length} non-inline attachments (${inline.length} inline)`
@@ -114,7 +118,7 @@ export async function writeEmailNote(
         }),
     }
   );
-  debugLog(
+  report.debug(
     `renderEmailMarkdown for email ${detail.id} in ${Date.now() - renderStart}ms (inline embeds: ${
       Object.keys(renderResult.inlineEmbeds).length
     }, inline errors: ${renderResult.inlineErrors.length})`
@@ -124,7 +128,7 @@ export async function writeEmailNote(
   // Phase two: the same note, now with its contents.
   const writeStart = Date.now();
   await writeOrCreateNote(vault, notePath, renderResult.markdown);
-  debugLog(`writeOrCreateNote ${notePath || '(root)'} in ${Date.now() - writeStart}ms`);
+  report.debug(`writeOrCreateNote ${notePath || '(root)'} in ${Date.now() - writeStart}ms`);
 
   return { notePath, attachmentErrors };
 }

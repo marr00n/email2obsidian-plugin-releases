@@ -1,15 +1,17 @@
-/* global console */
-import { normalizePath, Notice, Plugin, Vault } from 'obsidian';
+import { Plugin, Vault } from 'obsidian';
 import { ApiError, type E2oClient, type EmailSummary } from './api';
 import { openLedger, type SyncMode } from './fetch-ledger';
 import { openNoteNames } from './note-namer';
-import { ensureFolder, AttachmentSaveError } from './attachments';
+import { AttachmentSaveError } from './attachments';
 import { writeEmailNote, type WriteEmailNoteContext } from './write-email-note';
-import { basename, isRootPath } from './path-utils';
+import { resolveNoteFolder } from './note-folder';
+import { basename } from './path-utils';
+import { mapWithConcurrency } from './concurrency';
+import { silentSyncReport, type SyncReport } from './sync-report';
+
 export interface PipelineSettings {
   apiKey: string;
   notesFolder: string;
-  debugLogging?: boolean;
 }
 
 export type { SyncMode };
@@ -21,6 +23,12 @@ export interface SyncOptions {
   plugin: Plugin;
   /** The Service Client to read through; it already holds the API key. */
   client: E2oClient;
+  /**
+   * Where this run's toasts, warnings and debug lines go. Omit it and the run
+   * says nothing at all — which is what a test wants, and never what the
+   * plugin wants, so `main.ts` always supplies one.
+   */
+  report?: SyncReport;
 }
 
 export interface SyncResult {
@@ -28,33 +36,34 @@ export interface SyncResult {
   skipped: number;
   errors: string[];
   attachmentErrors: AttachmentSaveError[];
-  rateLimited: boolean;
 }
 
-export async function runSync(
-  opts: SyncOptions,
-  notifier: (msg: string) => void = (msg) => new Notice(msg)
-): Promise<SyncResult> {
+/** What one worker's attempt at a single email came out as. */
+type EmailSyncOutcome =
+  | { status: 'accepted'; attachmentErrors: AttachmentSaveError[] }
+  | { status: 'error'; message: string }
+  | { status: 'rate-limited' };
+
+export async function runSync(opts: SyncOptions): Promise<SyncResult> {
   const { settings, vault, plugin, mode, client } = opts;
-  const debugLog = createDebugLogger(Boolean(settings.debugLogging));
+  const report = opts.report ?? silentSyncReport();
   if (!settings.apiKey.trim()) {
     throw new Error('Add your Email2Obsidian API key in Settings before syncing.');
   }
 
-  const rawNoteFolder = settings.notesFolder ?? '';
-  const noteFolderIsRoot = isRootPath(rawNoteFolder);
-  const noteFolder = noteFolderIsRoot ? '' : normalizePath(rawNoteFolder);
-  if (!noteFolderIsRoot) {
-    await ensureFolder(vault, noteFolder);
-  }
+  const noteFolder = await resolveNoteFolder(vault, settings.notesFolder ?? '');
 
   const namerStart = Date.now();
-  const namer = await openNoteNames(vault, noteFolder);
-  debugLog(`openNoteNames in ${Date.now() - namerStart}ms`);
+  const namer = await openNoteNames(vault, noteFolder.path, {
+    warn: (msg, ...details) => report.warn(msg, ...details),
+  });
+  report.debug(`openNoteNames in ${Date.now() - namerStart}ms`);
 
-  const ledger = await openLedger(plugin);
+  const ledger = await openLedger(plugin, {
+    warn: (msg, ...details) => report.warn(msg, ...details),
+  });
 
-  const { emails: emailSummaries, stoppedEarly } = await paginateEmails(client, debugLog, {
+  const { emails: emailSummaries, stoppedEarly } = await paginateEmails(client, report, {
     // fetch-all wants the whole stream; only fetch-new leans on the ledger's
     // contiguity to stop scanning.
     stopWhen:
@@ -66,92 +75,92 @@ export async function runSync(
     : emailSummaries.filter((email) => !ledger.hasSeen(email.id));
 
   const skipped = mode === 'fetch-new' ? emailSummaries.length - selected.length : 0;
-  debugLog(
+  report.debug(
     `selection: mode=${mode}, total summaries=${emailSummaries.length}, selected=${selected.length}, skipped=${skipped}, stoppedEarly=${stoppedEarly}`
   );
-
-  let accepted = 0;
-  const errors: string[] = [];
-  const attachmentErrors: AttachmentSaveError[] = [];
-  let rateLimitedError: ApiError | null = null;
 
   const noteContext: WriteEmailNoteContext = {
     vault,
     fileManager: plugin.app.fileManager,
     namer,
-    noteFolder,
+    noteFolder: noteFolder.path,
     downloadAttachment: (id, expectedFileName) =>
       client.downloadAttachment(id, expectedFileName),
-    debugLog,
+    report,
   };
 
-  await runWithConcurrency(
+  // Flipped by a worker the instant it hits a 429; read back by the pool
+  // before it starts each not-yet-started item, so anything not already in
+  // flight is skipped while in-flight work still finishes.
+  let rateLimited = false;
+
+  const outcomes = await mapWithConcurrency<EmailSummary, EmailSyncOutcome>(
     selected,
     2,
     async (summary) => {
-      if (rateLimitedError) return;
       try {
         const fetchStart = Date.now();
         const detail = await client.getEmail(summary.id);
-        debugLog(
+        report.debug(
           `getEmail ${summary.id} fetched in ${Date.now() - fetchStart}ms (attachments: ${
             detail.attachments?.length ?? 0
           })`
         );
 
         const written = await writeEmailNote(noteContext, detail);
-        attachmentErrors.push(...written.attachmentErrors);
-
         ledger.accept(detail.id, basename(written.notePath));
-        accepted += 1;
+        return { status: 'accepted', attachmentErrors: written.attachmentErrors };
       } catch (error: unknown) {
         if (error instanceof ApiError && error.code === 'rate-limited') {
-          rateLimitedError = error;
-          return;
+          rateLimited = true;
+          return { status: 'rate-limited' };
         }
         const message =
           error instanceof Error
             ? error.message
             : 'Something went wrong syncing an email.';
-        console.warn(`[Email2Obsidian] ${message}`);
-        errors.push(message);
-        return;
+        report.warn(message);
+        return { status: 'error', message };
       }
-    }
+    },
+    { shouldStop: () => rateLimited }
   );
 
-  if (rateLimitedError) {
+  let accepted = 0;
+  const errors: string[] = [];
+  const attachmentErrors: AttachmentSaveError[] = [];
+  for (const outcome of outcomes) {
+    // Items the pool never started (skipped once `rateLimited` flipped) leave
+    // a hole here.
+    if (!outcome) continue;
+    if (outcome.status === 'accepted') {
+      accepted += 1;
+      attachmentErrors.push(...outcome.attachmentErrors);
+    } else if (outcome.status === 'error') {
+      errors.push(outcome.message);
+    }
+  }
+
+  if (rateLimited) {
     const message =
       "You've hit the rate limit. Please wait a bit or lower the sync frequency.";
-    notifier(message);
-    console.warn(`[Email2Obsidian] ${message}`);
+    report.notice(message);
+    report.warn(message);
     await ledger.commit({ mode, cutShort: true });
-    return {
-      synced: accepted,
-      skipped,
-      errors,
-      attachmentErrors,
-      rateLimited: true,
-    };
+    return { synced: accepted, skipped, errors, attachmentErrors };
   }
 
   const commitStart = Date.now();
   await ledger.commit({ mode, cutShort: false });
-  debugLog(
+  report.debug(
     `fetch ledger committed (${mode}) with ${accepted} entries in ${Date.now() - commitStart}ms`
   );
 
-  notifier(
+  report.notice(
     `Email2Obsidian Sync summary: ${accepted} added, ${skipped} skipped, ${errors.length} errors, ${attachmentErrors.length} attachment issues.`
   );
 
-  return {
-    synced: accepted,
-    skipped,
-    errors,
-    attachmentErrors,
-    rateLimited: false,
-  };
+  return { synced: accepted, skipped, errors, attachmentErrors };
 }
 
 /**
@@ -161,7 +170,7 @@ export async function runSync(
  */
 async function paginateEmails(
   client: E2oClient,
-  log?: (msg: string) => void,
+  report: SyncReport,
   options: { stopWhen?: (page: EmailSummary[]) => boolean } = {}
 ): Promise<{ emails: EmailSummary[]; stoppedEarly: boolean }> {
   const emails: EmailSummary[] = [];
@@ -174,7 +183,7 @@ async function paginateEmails(
   while (hasMore) {
     const pageStart = Date.now();
     const response = await client.listEmails({ cursor, sort: 'date-desc' });
-    log?.(
+    report.debug(
       `paginateEmails page ${page} fetched ${response.emails?.length ?? 0} in ${
         Date.now() - pageStart
       }ms`
@@ -193,43 +202,17 @@ async function paginateEmails(
     if (!hasMore) break;
     if (!cursor) {
       // hasMore with no cursor would re-request page 0 forever.
-      console.warn(
-        '[Email2Obsidian] The service reported more emails but sent no cursor; stopping the scan here.'
+      report.warn(
+        'The service reported more emails but sent no cursor; stopping the scan here.'
       );
       break;
     }
   }
 
-  log?.(
+  report.debug(
     `paginateEmails completed ${emails.length} emails across ${page} pages in ${
       Date.now() - started
     }ms`
   );
   return { emails, stoppedEarly };
-}
-
-function createDebugLogger(enabled: boolean): (msg: string) => void {
-  if (!enabled) {
-    return () => {};
-  }
-  return (msg: string) => {
-    console.debug(`[Email2Obsidian][debug] ${msg}`);
-  };
-}
-
-async function runWithConcurrency<T>(
-  items: T[],
-  limit: number,
-  worker: (item: T, index: number) => Promise<void>
-): Promise<void> {
-  let index = 0;
-  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (true) {
-      const current = index;
-      if (current >= items.length) break;
-      index += 1;
-      await worker(items[current], current);
-    }
-  });
-  await Promise.all(runners);
 }

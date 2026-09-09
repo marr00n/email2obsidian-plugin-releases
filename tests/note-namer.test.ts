@@ -117,6 +117,24 @@ describe('openNoteNames', () => {
     expect(notePath).toBe('Notes/deep nested subject.md');
   });
 
+  it('routes a scan failure through a supplied warn instead of console.warn', async () => {
+    const vault = new Vault();
+    vault.getAbstractFileByPath = () => {
+      throw new Error('vault exploded');
+    };
+    const warnings: unknown[][] = [];
+
+    const namer = await openNoteNames(vault, 'Notes', {
+      warn: (msg, ...details) => warnings.push([msg, ...details]),
+    });
+
+    // The scan failure is not fatal — reserve() still works off an empty set.
+    expect(namer.reserve('Hello', CREATED)).toBe('Notes/Hello.md');
+    expect(warnings).toEqual([
+      ['Unable to list folder Notes: vault exploded'],
+    ]);
+  });
+
   it('reserves synchronously, so concurrent callers cannot collide', async () => {
     const { namer } = await namerOver('Notes');
 
