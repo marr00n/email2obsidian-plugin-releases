@@ -13,3 +13,17 @@
   ## Server Behaviour
   - The Email2Obsidian service retains a received email for **72 hours**, then deletes it. The plugin holds the durable copy; the server is a short-lived queue, not a store.
   - This is why `fetch-all` re-creating a note as `-1` rather than reconciling with an existing one is accepted behaviour, not a bug: nothing older than 2 hours is still on the server, so the window in which a re-fetch can duplicate an already-saved note is small and self-clearing.
+
+## Agent skills
+
+### Issue tracker
+
+Issues tracked as GitHub Issues in this repo (`marr00n/email2obsidian-plugin-releases`), via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five canonical labels (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout — `CONTEXT.md` + `docs/adr/` at repo root. See `docs/agents/domain.md`.
