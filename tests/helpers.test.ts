@@ -22,6 +22,7 @@ describe('processInlinePlaceholders', () => {
     subject: 'Subj',
     createdAt: '2021-01-01',
     hashtags: [],
+    vaultMarker: null,
     markdownBody: '',
     attachments: [],
   };
@@ -69,6 +70,7 @@ describe('renderEmailMarkdown', () => {
     subject: 'Hello',
     createdAt: '2021-01-01',
     hashtags: ['tag'],
+    vaultMarker: null,
     markdownBody: `Body ![](data:image/png;base64,${inlineData})`,
     attachments: [
       {
@@ -77,7 +79,7 @@ describe('renderEmailMarkdown', () => {
         fileSize: 1,
         mimeType: 'text/plain',
         createdAt: '2021',
-        contentDisposition: 'attachment',
+        isInline: false,
       } as AttachmentMeta,
       {
         id: 2,
@@ -85,7 +87,7 @@ describe('renderEmailMarkdown', () => {
         fileSize: 1,
         mimeType: 'image/png',
         createdAt: '2021',
-        contentDisposition: 'inline',
+        isInline: true,
       } as AttachmentMeta,
     ],
   };

@@ -150,7 +150,7 @@ export async function renderEmailMarkdown(
   paths: RenderPaths,
   options: RenderMarkdownOptions
 ): Promise<RenderedMarkdown> {
-  const tags = Array.from(new Set([...(email.hashtags || []), 'email2obsidian']));
+  const tags = Array.from(new Set([...email.hashtags, 'email2obsidian']));
   const frontmatter = [
     '---',
     `title: "${escapeFrontmatter(email.subject)}"`,
@@ -176,9 +176,7 @@ export async function renderEmailMarkdown(
         errors: [],
       };
 
-  const nonInline = (email.attachments || []).filter(
-    (att) => att.contentDisposition !== 'inline'
-  );
+  const nonInline = (email.attachments || []).filter((att) => !att.isInline);
 
   const attachmentSection = nonInline.length
     ? buildAttachmentSection(nonInline, options.savedPaths, fallbackFolder)

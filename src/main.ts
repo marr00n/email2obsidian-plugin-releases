@@ -8,7 +8,7 @@ import {
   Setting,
   normalizePath,
 } from 'obsidian';
-import { ApiError, listEmails } from './api';
+import { ApiError, createE2oClient, type E2oClient } from './api';
 import { runSync, SyncMode } from './pipeline';
 
 export type SyncInterval =
@@ -59,10 +59,12 @@ export default class Email2ObsidianPlugin extends Plugin {
   private isSyncing = false;
   private intervalHandle: number | null = null;
   private debugLog = createDebugLogger(false);
+  private client: E2oClient = createE2oClient({ apiKey: '' });
 
   async onload(): Promise<void> {
     await this.loadSettings();
     this.debugLog = createDebugLogger(this.settings.debugLogging);
+    this.client = createE2oClient({ apiKey: this.settings.apiKey });
 
     this.addSettingTab(new Email2ObsidianSettingTab(this.app, this));
 
@@ -104,8 +106,12 @@ export default class Email2ObsidianPlugin extends Plugin {
 
   async updateSettings(partial: Partial<Email2ObsidianSettings>): Promise<void> {
     const prevPeriodic = this.settings.periodicSync;
+    const prevApiKey = this.settings.apiKey;
     this.settings = normalizeSettings({ ...this.settings, ...partial });
     this.debugLog = createDebugLogger(this.settings.debugLogging);
+    if (this.settings.apiKey !== prevApiKey) {
+      this.client = createE2oClient({ apiKey: this.settings.apiKey });
+    }
     await this.saveSettings();
     const shouldRunImmediately =
       !prevPeriodic && this.settings.periodicSync === true;
@@ -128,6 +134,7 @@ export default class Email2ObsidianPlugin extends Plugin {
           settings: this.settings,
           vault: this.app.vault,
           plugin: this,
+          client: this.client,
         },
         (msg) => new Notice(msg)
       );
@@ -372,7 +379,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
     btn.setButtonText('Testing…');
 
     try {
-      await listEmails({ apiKey, sort: 'date-desc' });
+      await createE2oClient({ apiKey }).listEmails({ sort: 'date-desc' });
       new Notice('Connected to Email2Obsidian.', 3000);
     } catch (error) {
       if (error instanceof ApiError) {

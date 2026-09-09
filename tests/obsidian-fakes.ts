@@ -105,6 +105,30 @@ export class Vault {
   }
 }
 
+export interface RequestUrlParam {
+  url: string;
+  method?: string;
+  headers?: Record<string, string>;
+}
+
+export interface RequestUrlResponse {
+  status: number;
+  headers: Record<string, string>;
+  text: string;
+  arrayBuffer: ArrayBuffer;
+  json: unknown;
+}
+
+/**
+ * Tests never hit the network: inject an http adapter into createE2oClient
+ * instead. This exists so `import { requestUrl } from 'obsidian'` resolves.
+ */
+export function requestUrl(_param: RequestUrlParam): Promise<RequestUrlResponse> {
+  return Promise.reject(
+    new Error('requestUrl is unavailable in tests; inject an http adapter.')
+  );
+}
+
 export class Notice {
   message: string;
   constructor(message: string) {

@@ -1,16 +1,16 @@
 /* global console */
 import { Vault, TFile, FileManager, normalizePath } from 'obsidian';
-import { AttachmentMeta, downloadAttachment } from './api';
+import type { AttachmentMeta, DownloadAttachment } from './api';
 import { basename, extname, isRootPath } from './path-utils';
 
 export interface SaveAttachmentsOptions {
   vault: Vault;
   fileManager: FileManager;
-  apiKey: string;
   sourcePath: string;
   attachments: AttachmentMeta[];
   logger?: (msg: string) => void;
-  downloader?: typeof downloadAttachment;
+  /** The Service Client's `downloadAttachment`; credentials live in the client. */
+  downloader: DownloadAttachment;
 }
 
 export interface SaveAttachmentsResult {
@@ -126,16 +126,13 @@ export async function saveAttachments(
   const {
     vault,
     fileManager,
-    apiKey,
     attachments,
     sourcePath,
     logger = console.warn,
-    downloader = downloadAttachment,
+    downloader,
   } = opts;
 
-  const nonInline = attachments.filter(
-    (att) => att.contentDisposition !== 'inline'
-  );
+  const nonInline = attachments.filter((att) => !att.isInline);
 
   const errors: AttachmentSaveError[] = [];
   const savedPathById: Record<number, string> = {};
@@ -153,7 +150,7 @@ export async function saveAttachments(
       });
 
       try {
-        const downloaded = await downloader(att.id, apiKey, baseName);
+        const downloaded = await downloader(att.id, baseName);
         return { att, baseName, downloaded };
       } catch (error) {
         const errObj = toAttachmentSaveError(att, error);
