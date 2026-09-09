@@ -6,6 +6,7 @@ import { openNoteNames } from './note-namer';
 import { ensureFolder, AttachmentSaveError } from './attachments';
 import { writeEmailNote, type WriteEmailNoteContext } from './write-email-note';
 import { basename, isRootPath } from './path-utils';
+import { mapWithConcurrency } from './concurrency';
 export interface PipelineSettings {
   apiKey: string;
   notesFolder: string;
@@ -30,6 +31,12 @@ export interface SyncResult {
   attachmentErrors: AttachmentSaveError[];
   rateLimited: boolean;
 }
+
+/** What one worker's attempt at a single email came out as. */
+type EmailSyncOutcome =
+  | { status: 'accepted'; attachmentErrors: AttachmentSaveError[] }
+  | { status: 'error'; message: string }
+  | { status: 'rate-limited' };
 
 export async function runSync(
   opts: SyncOptions,
@@ -70,11 +77,6 @@ export async function runSync(
     `selection: mode=${mode}, total summaries=${emailSummaries.length}, selected=${selected.length}, skipped=${skipped}, stoppedEarly=${stoppedEarly}`
   );
 
-  let accepted = 0;
-  const errors: string[] = [];
-  const attachmentErrors: AttachmentSaveError[] = [];
-  let rateLimitedError: ApiError | null = null;
-
   const noteContext: WriteEmailNoteContext = {
     vault,
     fileManager: plugin.app.fileManager,
@@ -85,11 +87,15 @@ export async function runSync(
     debugLog,
   };
 
-  await runWithConcurrency(
+  // Flipped by a worker the instant it hits a 429; read back by the pool
+  // before it starts each not-yet-started item, so anything not already in
+  // flight is skipped while in-flight work still finishes.
+  let rateLimited = false;
+
+  const outcomes = await mapWithConcurrency<EmailSummary, EmailSyncOutcome>(
     selected,
     2,
     async (summary) => {
-      if (rateLimitedError) return;
       try {
         const fetchStart = Date.now();
         const detail = await client.getEmail(summary.id);
@@ -100,27 +106,40 @@ export async function runSync(
         );
 
         const written = await writeEmailNote(noteContext, detail);
-        attachmentErrors.push(...written.attachmentErrors);
-
         ledger.accept(detail.id, basename(written.notePath));
-        accepted += 1;
+        return { status: 'accepted', attachmentErrors: written.attachmentErrors };
       } catch (error: unknown) {
         if (error instanceof ApiError && error.code === 'rate-limited') {
-          rateLimitedError = error;
-          return;
+          rateLimited = true;
+          return { status: 'rate-limited' };
         }
         const message =
           error instanceof Error
             ? error.message
             : 'Something went wrong syncing an email.';
         console.warn(`[Email2Obsidian] ${message}`);
-        errors.push(message);
-        return;
+        return { status: 'error', message };
       }
-    }
+    },
+    { shouldStop: () => rateLimited }
   );
 
-  if (rateLimitedError) {
+  let accepted = 0;
+  const errors: string[] = [];
+  const attachmentErrors: AttachmentSaveError[] = [];
+  for (const outcome of outcomes) {
+    // Items the pool never started (skipped once `rateLimited` flipped) leave
+    // a hole here.
+    if (!outcome) continue;
+    if (outcome.status === 'accepted') {
+      accepted += 1;
+      attachmentErrors.push(...outcome.attachmentErrors);
+    } else if (outcome.status === 'error') {
+      errors.push(outcome.message);
+    }
+  }
+
+  if (rateLimited) {
     const message =
       "You've hit the rate limit. Please wait a bit or lower the sync frequency.";
     notifier(message);
@@ -215,21 +234,4 @@ function createDebugLogger(enabled: boolean): (msg: string) => void {
   return (msg: string) => {
     console.debug(`[Email2Obsidian][debug] ${msg}`);
   };
-}
-
-async function runWithConcurrency<T>(
-  items: T[],
-  limit: number,
-  worker: (item: T, index: number) => Promise<void>
-): Promise<void> {
-  let index = 0;
-  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (true) {
-      const current = index;
-      if (current >= items.length) break;
-      index += 1;
-      await worker(items[current], current);
-    }
-  });
-  await Promise.all(runners);
 }

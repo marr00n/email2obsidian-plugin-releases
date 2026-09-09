@@ -2,6 +2,7 @@
 import { Vault, TFile, FileManager, normalizePath } from 'obsidian';
 import type { AttachmentMeta, DownloadAttachment } from './api';
 import { basename, extname, isRootPath } from './path-utils';
+import { mapWithConcurrency } from './concurrency';
 
 export interface SaveAttachmentsOptions {
   vault: Vault;
@@ -142,7 +143,7 @@ export async function saveAttachments(
   const errors: AttachmentSaveError[] = [];
   const savedPathById: Record<number, string> = {};
 
-  const downloads = await runWithConcurrency(
+  const downloads = await mapWithConcurrency(
     nonInlineAttachments,
     3,
     async (att, index) => {
@@ -229,27 +230,4 @@ async function writeBinaryFile(
     return;
   }
   await vault.createBinary(filePath, data);
-}
-
-async function runWithConcurrency<T, R>(
-  items: T[],
-  limit: number,
-  worker: (item: T, index: number) => Promise<R>
-): Promise<R[]> {
-  const results: R[] = [];
-  let current = 0;
-
-  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (true) {
-      const index = current;
-      if (index >= items.length) {
-        break;
-      }
-      current += 1;
-      results[index] = await worker(items[index], index);
-    }
-  });
-
-  await Promise.all(runners);
-  return results;
 }
