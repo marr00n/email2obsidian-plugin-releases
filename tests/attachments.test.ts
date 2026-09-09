@@ -31,7 +31,6 @@ describe('attachments', () => {
     const result = await saveAttachments({
       vault,
       fileManager,
-      apiKey: 'test-key',
       sourcePath: 'Notes/email.md',
       attachments: [
         {
@@ -39,11 +38,11 @@ describe('attachments', () => {
           fileName: 'photo.jpg',
           fileSize: 123,
           mimeType: 'image/jpeg',
-          createdAt: '2026-01-01T00:00:00Z',
-          contentDisposition: 'attachment',
+          createdAt: '2026-01-01T00:00:00',
+          isInline: false,
         },
       ],
-      downloader: async (_id, _apiKey, expectedName) => ({
+      downloader: async (_id, expectedName) => ({
         data: toArrayBuffer('image'),
         mimeType: 'image/jpeg',
         fileName: expectedName ?? 'photo.jpg',

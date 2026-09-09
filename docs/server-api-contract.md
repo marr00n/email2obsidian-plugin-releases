@@ -152,7 +152,7 @@ same window.
 Breaking any of these breaks sync, not just a display detail:
 
 1. `emails` is an array and `hasMore` is a boolean on every 200 response —
-   the plugin rejects the payload outright otherwise (`src/api.ts:227`).
+   the plugin rejects the payload outright otherwise (`src/api.ts:325`).
 2. `attachments` is an array, never `null`.
 3. `markdownBody` is a string, `""` rather than `null`, when there is no HTML.
 4. `subject` is a string, never `null`.

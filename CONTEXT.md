@@ -22,6 +22,11 @@ _Avoid_: tag (unqualified)
 An email that carries no Vault Marker.
 _Avoid_: untagged email, null vault, default vault
 
+**Service Client**:
+The plugin's one handset to the E2O service, holding the credentials and the
+transport. Wire shapes end at it; everything past it sees domain values.
+_Avoid_: api module, fetcher, HTTP layer
+
 ## Relationships
 
 - A **Vault Marker** names at most one intended **Obsidian Vault**

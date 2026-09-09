@@ -1,6 +1,6 @@
 /* global console */
 import { normalizePath, Notice, Plugin, Vault, TFile } from 'obsidian';
-import { getEmail, listEmails, EmailSummary, ApiError } from './api';
+import { ApiError, type E2oClient, type EmailSummary } from './api';
 import {
   appendFetchLog,
   loadFetchLog,
@@ -30,6 +30,8 @@ export interface SyncOptions {
   settings: PipelineSettings;
   vault: Vault;
   plugin: Plugin;
+  /** The Service Client to read through; it already holds the API key. */
+  client: E2oClient;
 }
 
 export interface SyncResult {
@@ -44,10 +46,9 @@ export async function runSync(
   opts: SyncOptions,
   notifier: (msg: string) => void = (msg) => new Notice(msg)
 ): Promise<SyncResult> {
-  const { settings, vault, plugin, mode } = opts;
+  const { settings, vault, plugin, mode, client } = opts;
   const debugLog = createDebugLogger(Boolean(settings.debugLogging));
-  const apiKey = settings.apiKey.trim();
-  if (!apiKey) {
+  if (!settings.apiKey.trim()) {
     throw new Error('Add your Email2Obsidian API key in Settings before syncing.');
   }
 
@@ -67,7 +68,7 @@ export async function runSync(
   const fetchLog = await loadFetchLog(plugin);
   const loggedIds = new Set(Object.keys(fetchLog));
 
-  const { emails: emailSummaries, stoppedEarly } = await paginateEmails(apiKey, debugLog, {
+  const { emails: emailSummaries, stoppedEarly } = await paginateEmails(client, debugLog, {
     stopOnLogged: mode === 'fetch-new' ? loggedIds : undefined,
   });
 
@@ -94,7 +95,7 @@ export async function runSync(
       if (rateLimitedError) return;
       try {
         const fetchStart = Date.now();
-        const detail = await getEmail(summary.id, apiKey);
+        const detail = await client.getEmail(summary.id);
         debugLog(
           `getEmail ${summary.id} fetched in ${Date.now() - fetchStart}ms (attachments: ${
             detail.attachments?.length ?? 0
@@ -117,10 +118,11 @@ export async function runSync(
         const savedAttachments: SaveAttachmentsResult = await saveAttachments({
           vault,
           fileManager: plugin.app.fileManager,
-          apiKey,
           attachments: detail.attachments || [],
           sourcePath: notePath,
           logger: (msg) => console.warn(msg),
+          downloader: (id, expectedFileName) =>
+            client.downloadAttachment(id, expectedFileName),
         });
         debugLog(
           `saveAttachments for email ${detail.id} completed in ${Date.now() - saveStart}ms; saved ${
@@ -228,7 +230,7 @@ export async function runSync(
 }
 
 async function paginateEmails(
-  apiKey: string,
+  client: E2oClient,
   log?: (msg: string) => void,
   options: { stopOnLogged?: Set<string> } = {}
 ): Promise<{ emails: EmailSummary[]; stoppedEarly: boolean }> {
@@ -241,7 +243,7 @@ async function paginateEmails(
 
   while (hasMore) {
     const pageStart = Date.now();
-    const response = await listEmails({ apiKey, cursor, sort: 'date-desc' });
+    const response = await client.listEmails({ cursor, sort: 'date-desc' });
     log?.(
       `paginateEmails page ${page} fetched ${response.emails?.length ?? 0} in ${
         Date.now() - pageStart
