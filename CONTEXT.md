@@ -27,6 +27,12 @@ The plugin's one handset to the E2O service, holding the credentials and the
 transport. Wire shapes end at it; everything past it sees domain values.
 _Avoid_: api module, fetcher, HTTP layer
 
+**Note Namer**:
+The plugin's one answer to "which filename does this email-derived note get?".
+Opened over the destination folder, it scans that folder once, then sanitises,
+resolves collisions with `-1`, `-2`, … and reserves each note path it hands out.
+_Avoid_: filename helper, safeFilename, name lock, existing-names set
+
 ## Relationships
 
 - A **Vault Marker** names at most one intended **Obsidian Vault**

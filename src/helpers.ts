@@ -15,32 +15,6 @@ export type InlineBinarySaver = (opts: {
   mimeType?: string | null;
 }) => Promise<{ filename: string; path: string }>;
 
-export interface FilenameResult {
-  filename: string;
-  nextSuffix: number;
-}
-
-/**
- * Generate a safe filename from subject + createdAt. If collisions occur,
- * append -1, -2, ... until unique within the provided existing set.
- */
-export function safeFilename(
-  subject: string,
-  createdAt: string,
-  existingNames: Set<string>
-): FilenameResult {
-  const base = sanitizeFilename(subject || createdAt || 'email');
-  let candidate = `${base}.md`;
-  let suffix = 1;
-
-  while (existingNames.has(candidate)) {
-    candidate = `${base}-${suffix}.md`;
-    suffix += 1;
-  }
-
-  return { filename: candidate, nextSuffix: suffix };
-}
-
 export interface RenderPaths {
   noteFolder: string;
 }
@@ -191,15 +165,6 @@ export async function renderEmailMarkdown(
     inlineEmbeds: inlineResult.inlineEmbeds,
     inlineErrors: inlineResult.errors,
   };
-}
-
-function sanitizeFilename(input: string): string {
-  const cleaned = input
-    .replace(/[\\/*?"<>|]+/g, ' ')
-    .replace(/:/g, '-')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return cleaned.length ? cleaned : 'email';
 }
 
 function escapeFrontmatter(input: string): string {

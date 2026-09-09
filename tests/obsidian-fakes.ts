@@ -14,6 +14,12 @@ class FakeAbstractFile {
   constructor(p: string) {
     this.path = normalizePath(p);
   }
+
+  /** Mirrors Obsidian's TAbstractFile.name: the last path segment. */
+  get name(): string {
+    const idx = this.path.lastIndexOf('/');
+    return idx === -1 ? this.path : this.path.slice(idx + 1);
+  }
 }
 
 export class TFile extends FakeAbstractFile {

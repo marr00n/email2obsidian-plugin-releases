@@ -8,7 +8,8 @@ import {
   writeFetchLog,
   FetchLogInput,
 } from './fetch-log-store';
-import { renderEmailMarkdown, safeFilename, type FilenameResult } from './helpers';
+import { renderEmailMarkdown } from './helpers';
+import { openNoteNames } from './note-namer';
 import {
   saveAttachments,
   SaveAttachmentsResult,
@@ -16,7 +17,7 @@ import {
   AttachmentSaveError,
   saveBinaryData,
 } from './attachments';
-import { joinPosix, isRootPath } from './path-utils';
+import { basename, isRootPath } from './path-utils';
 export interface PipelineSettings {
   apiKey: string;
   notesFolder: string;
@@ -59,11 +60,9 @@ export async function runSync(
     await ensureFolder(vault, noteFolder);
   }
 
-  const existingScanStart = Date.now();
-  const existingNames = await loadExistingNoteNames(vault, noteFolder, { shallow: true });
-  debugLog(
-    `loadExistingNoteNames in ${Date.now() - existingScanStart}ms (found ${existingNames.size})`
-  );
+  const namerStart = Date.now();
+  const namer = await openNoteNames(vault, noteFolder);
+  debugLog(`openNoteNames in ${Date.now() - namerStart}ms`);
 
   const fetchLog = await loadFetchLog(plugin);
   const loggedIds = new Set(Object.keys(fetchLog));
@@ -86,8 +85,6 @@ export async function runSync(
   const attachmentErrors: AttachmentSaveError[] = [];
   let rateLimitedError: ApiError | null = null;
 
-  const nameLock = createMutex();
-
   await runWithConcurrency(
     selected,
     2,
@@ -102,13 +99,7 @@ export async function runSync(
           })`
         );
 
-        const filenameResult: FilenameResult = await nameLock(async () => {
-          const res = safeFilename(detail.subject, detail.createdAt, existingNames);
-          existingNames.add(res.filename);
-          return res;
-        });
-
-        const notePath = joinPosix(noteFolder, filenameResult.filename);
+        const notePath = namer.reserve(detail.subject, detail.createdAt);
 
         // Create the note before saving attachments so Obsidian can resolve
         // relative attachment paths ("Same folder as current file", etc.).
@@ -166,7 +157,7 @@ export async function runSync(
 
         successes.push({
           id: detail.id,
-          filename: filenameResult.filename,
+          filename: basename(notePath),
         });
       } catch (error: unknown) {
         if (error instanceof ApiError && error.code === 'rate-limited') {
@@ -270,35 +261,6 @@ async function paginateEmails(
   return { emails, stoppedEarly };
 }
 
-async function loadExistingNoteNames(
-  vault: Vault,
-  noteFolder: string,
-  options: { shallow?: boolean } = {}
-): Promise<Set<string>> {
-  const names = new Set<string>();
-  try {
-    const folder = noteFolder.length ? vault.getFolderByPath(noteFolder) : vault.getRoot();
-    if (!folder) {
-      return names;
-    }
-    for (const child of folder.children) {
-      if (child instanceof TFile) {
-        names.add(child.name);
-      }
-      // We intentionally skip subfolders to keep scans cheap on large vaults.
-      // If recursive scanning is ever needed, it can be added behind the shallow flag.
-    }
-  } catch (error: unknown) {
-    // ignore missing folder; it will be created elsewhere
-    console.warn(
-      `[Email2Obsidian] Unable to list folder ${
-        noteFolder.length ? noteFolder : 'vault root'
-      }: ${(error as Error).message}`
-    );
-  }
-  return names;
-}
-
 async function writeOrCreateNote(
   vault: Vault,
   path: string,
@@ -318,18 +280,6 @@ function createDebugLogger(enabled: boolean): (msg: string) => void {
   }
   return (msg: string) => {
     console.debug(`[Email2Obsidian][debug] ${msg}`);
-  };
-}
-
-function createMutex() {
-  let current = Promise.resolve();
-  return async <T>(fn: () => Promise<T> | T): Promise<T> => {
-    const result = current.then(() => fn());
-    current = result.then(
-      () => Promise.resolve(),
-      () => Promise.resolve()
-    );
-    return result;
   };
 }
 
