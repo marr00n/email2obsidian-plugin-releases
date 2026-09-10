@@ -46,7 +46,10 @@ is bounded by the service's own 72-hour retention — the whole stream is at mos
 72 hours of email — which is also why a decline older than that is never
 released: the email it names is already deleted. A released id the run never
 met is dropped at commit for the same reason, so the next run stops early
-again instead of hunting for something that no longer exists.
+again instead of hunting for something that no longer exists — but only when
+the run finished. A run cut short by a rate limit has proved nothing about
+what it did not reach: it stopped, the service did not. Its released entries
+stay put, and the next run releases and hunts them again.
 
 Notes already downloaded under a previous policy stay where they are. The
 plugin never moves or deletes a note in response to a policy change: those

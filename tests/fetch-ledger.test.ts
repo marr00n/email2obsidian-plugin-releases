@@ -302,6 +302,47 @@ describe('fetch ledger', () => {
     expect(reopened.shouldStopScan([summary(9)])).toBe(true);
   });
 
+  it('keeps a released id a cut-short run never reached, so the next run hunts it again', async () => {
+    const plugin = newPlugin();
+    await plugin.saveData({
+      'fetch-log': {
+        '9': { fetchedAt: RECENT, filename: 'Nine.md' },
+        '7': { fetchedAt: RECENT, status: 'declined', vaultMarker: 'Work' },
+      },
+    });
+    const ledger = await openLedger(plugin, { clock });
+    ledger.release(claimsWork);
+    ledger.accept(9, 'Nine.md');
+
+    // The rate limit hit before 7 was imported. The run stopped; the service
+    // did not delete anything. Dropping 7 here would tear a hole in the
+    // contiguous run, and the next scan would stop on 9 without ever
+    // reaching 7 again — losing the very email the release existed to save.
+    await ledger.commit({ mode: 'fetch-new', cutShort: true });
+    expect(await storedLog(plugin)).toEqual({
+      '9': { fetchedAt: clock(), filename: 'Nine.md' },
+      '7': { fetchedAt: RECENT, status: 'declined', vaultMarker: 'Work' },
+    });
+
+    const reopened = await openLedger(plugin, { clock });
+    expect(reopened.release(claimsWork)).toBe(1);
+    expect(reopened.hasSeen(7)).toBe(false);
+  });
+
+  it('writes nothing when a cut-short run released ids but decided nothing', async () => {
+    const plugin = newPlugin();
+    const log = { '7': { fetchedAt: RECENT, status: 'declined', vaultMarker: 'Work' } };
+    await plugin.saveData({ 'fetch-log': log, settings: { apiKey: 'k' } });
+    const ledger = await openLedger(plugin, { clock });
+    ledger.release(claimsWork);
+
+    await ledger.commit({ mode: 'fetch-new', cutShort: true });
+    expect(await plugin.loadData()).toEqual({
+      'fetch-log': log,
+      settings: { apiKey: 'k' },
+    });
+  });
+
   it('keeps a released id that the run went on to import', async () => {
     const plugin = newPlugin();
     await plugin.saveData({

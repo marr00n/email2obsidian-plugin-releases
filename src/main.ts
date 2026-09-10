@@ -468,7 +468,10 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
       // Diagnostic only: it reports what was turned away and never proposes a
       // marker. A marker nobody has sent to recently is indistinguishable
       // from one the user mistyped, so nothing here can be a suggestion.
-      markersDesc.append(`Last fetch declined: ${describeDeclines(settings.lastDeclined)}`);
+      // Not "last fetch": a quiet background poll deliberately leaves this
+      // standing rather than wiping a tally the user has not seen yet, so the
+      // wording must not claim the most recent run is what produced it.
+      markersDesc.append(`Recently declined: ${describeDeclines(settings.lastDeclined)}`);
     }
 
     new Setting(containerEl)

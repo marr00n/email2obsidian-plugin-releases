@@ -249,17 +249,24 @@ class FetchLedger implements Ledger {
       return;
     }
 
+    // A run that finished and still did not meet a released id has proved the
+    // service no longer holds it, and dropping the entry is what stops every
+    // later run from reading the stream out in search of it. A run that was
+    // cut short has proved nothing of the sort — it stopped, the service did
+    // not — so its released entries stay exactly where they are, and the next
+    // run releases and hunts them again.
+    const missedAreGone = !cutShort;
+
     // fetch-new appends. A cut-short run still writes: newest-first means the
     // accepted ids are a contiguous prefix, and logging them is what stops the
     // next run from fetching them again.
-    if (!this.pending.size && !this.released.size) return;
+    if (!this.pending.size && !(missedAreGone && this.released.size)) return;
 
     const base = { ...this.stored };
-    for (const key of Array.from(this.released)) {
-      // Released, and the run never met it: the service had already deleted
-      // it. Dropping it is what stops every later run from reading the stream
-      // out in search of an email that no longer exists.
-      if (!this.pending.has(key)) delete base[key];
+    if (missedAreGone) {
+      for (const key of Array.from(this.released)) {
+        if (!this.pending.has(key)) delete base[key];
+      }
     }
     await this.write({ ...base, ...this.snapshot() });
   }
