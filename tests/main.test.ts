@@ -7,7 +7,11 @@ import Email2ObsidianPlugin, {
   syncIntervalToMs,
 } from '../src/main';
 import { App, Plugin, Vault } from 'obsidian';
-import { describeDeclines, formatVaultMarkers } from '../src/receive-policy';
+import {
+  describeDeclines,
+  formatVaultMarkers,
+  listMarkers,
+} from '../src/receive-policy';
 
 const mockRunSync = vi.fn();
 
@@ -106,6 +110,7 @@ describe('main normalization helpers', () => {
       { marker: '', count: 2 },
     ]);
     expect(describeDeclines(normalized.lastDeclined)).toBe('Art (4), no marker (2)');
+    expect(listMarkers(normalized.lastDeclined)).toBe('Art, no marker');
   });
 
   it('handles sync interval defaults and conversion', () => {

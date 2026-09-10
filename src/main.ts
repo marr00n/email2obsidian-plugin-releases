@@ -17,6 +17,7 @@ import {
   describeDeclines,
   filtersByMarker,
   formatVaultMarkers,
+  listMarkers,
   parseVaultMarkers,
   receivePolicyFor,
   type MarkerCount,
@@ -614,11 +615,16 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
       return;
     }
 
-    const emails = pending.total === 1 ? '1 email' : `${pending.total} emails`;
-    setting.setDesc(
-      `${emails} turned away by your previous markers will arrive on the next ` +
-        `fetch: ${describeDeclines(pending.byMarker)}.`
+    const releaseDesc = document.createDocumentFragment();
+    const emails = document.createElement('strong');
+    emails.textContent =
+      pending.total === 1 ? '1 email' : `${pending.total} emails`;
+    releaseDesc.appendChild(emails);
+    releaseDesc.append(
+      ' turned away by your previous markers will arrive on the next ' +
+        `fetch: ${listMarkers(pending.byMarker)}.`
     );
+    setting.setDesc(releaseDesc);
     button.setDisabled(false);
   }
 

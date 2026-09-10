@@ -206,6 +206,14 @@ export function describeDeclines(counts: MarkerCount[]): string {
 }
 
 /**
+ * `Art, Wrok` — the same markers without their counts, for the one place that
+ * states the total separately and would otherwise say it twice.
+ */
+export function listMarkers(counts: MarkerCount[]): string {
+  return counts.map((entry) => markerText(entry.marker)).join(', ');
+}
+
+/**
  * The one thing that betrays an account without vault routing: the service
  * stored no Vault Marker, yet the sender clearly wrote one and it is still
  * sitting in the subject. On an entitled account this cannot happen — the
