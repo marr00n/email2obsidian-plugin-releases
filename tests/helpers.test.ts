@@ -98,6 +98,7 @@ describe('renderEmailMarkdown', () => {
       email,
       { noteFolder: 'Notes' },
       {
+        nonInlineAttachments: email.attachments.filter((att) => !att.isInline),
         savedPaths,
         inlineSaver: async (opts) => ({
           filename: opts.suggestedName,

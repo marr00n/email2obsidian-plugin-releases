@@ -27,6 +27,19 @@ The plugin's one handset to the E2O service, holding the credentials and the
 transport. Wire shapes end at it; everything past it sees domain values.
 _Avoid_: api module, fetcher, HTTP layer
 
+**Note Namer**:
+The plugin's one answer to "which filename does this email-derived note get?".
+Opened over the destination folder, it scans that folder once, then sanitises,
+resolves collisions with `-1`, `-2`, … and reserves each note path it hands out.
+_Avoid_: filename helper, safeFilename, name lock, existing-names set
+
+**Fetch Ledger**:
+The plugin's record of which emails this install has already dealt with —
+accepted or declined. It is a contiguous run of the newest emails, which is why
+the newest-first scan may stop at the first entry it recognises: everything
+older is already in the ledger.
+_Avoid_: fetch log, seen set, logged ids, history, dedupe cache
+
 ## Relationships
 
 - A **Vault Marker** names at most one intended **Obsidian Vault**

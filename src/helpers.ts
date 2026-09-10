@@ -15,32 +15,6 @@ export type InlineBinarySaver = (opts: {
   mimeType?: string | null;
 }) => Promise<{ filename: string; path: string }>;
 
-export interface FilenameResult {
-  filename: string;
-  nextSuffix: number;
-}
-
-/**
- * Generate a safe filename from subject + createdAt. If collisions occur,
- * append -1, -2, ... until unique within the provided existing set.
- */
-export function safeFilename(
-  subject: string,
-  createdAt: string,
-  existingNames: Set<string>
-): FilenameResult {
-  const base = sanitizeFilename(subject || createdAt || 'email');
-  let candidate = `${base}.md`;
-  let suffix = 1;
-
-  while (existingNames.has(candidate)) {
-    candidate = `${base}-${suffix}.md`;
-    suffix += 1;
-  }
-
-  return { filename: candidate, nextSuffix: suffix };
-}
-
 export interface RenderPaths {
   noteFolder: string;
 }
@@ -52,6 +26,12 @@ export interface RenderedMarkdown {
 }
 
 export interface RenderMarkdownOptions {
+  /**
+   * The email's non-inline attachments — the ones that get an Attachments
+   * section entry. Partitioned once by the caller (see `writeEmailNote`);
+   * this function does not re-filter.
+   */
+  nonInlineAttachments: AttachmentMeta[];
   savedPaths?: Record<number, string>;
   inlineSaver: InlineBinarySaver;
 }
@@ -143,7 +123,8 @@ export async function processInlinePlaceholders(
 
 /**
  * Build markdown with frontmatter, body replacements for inline attachments,
- * and a trailing Attachments section for non-inline files.
+ * and a trailing Attachments section for the non-inline files the caller
+ * supplies. Rendering the body can itself save files, via `inlineSaver`.
  */
 export async function renderEmailMarkdown(
   email: EmailDetail,
@@ -157,6 +138,11 @@ export async function renderEmailMarkdown(
     `created: ${email.createdAt}`,
     `tags: [${tags.join(', ')}]`,
     `email2obsidianID: ${email.id}`,
+    // ADR-0003: every note carries the Vault Marker it arrived under, so a
+    // later cleanup or re-route can work locally. Written on every note and
+    // left empty for an Unmarked Email rather than omitted, so a query over
+    // the property needs no null branch.
+    `email2obsidianVault: "${escapeFrontmatter(email.vaultMarker ?? '')}"`,
     '---',
   ].join('\n');
 
@@ -176,7 +162,7 @@ export async function renderEmailMarkdown(
         errors: [],
       };
 
-  const nonInline = (email.attachments || []).filter((att) => !att.isInline);
+  const nonInline = options.nonInlineAttachments;
 
   const attachmentSection = nonInline.length
     ? buildAttachmentSection(nonInline, options.savedPaths, fallbackFolder)
@@ -191,15 +177,6 @@ export async function renderEmailMarkdown(
     inlineEmbeds: inlineResult.inlineEmbeds,
     inlineErrors: inlineResult.errors,
   };
-}
-
-function sanitizeFilename(input: string): string {
-  const cleaned = input
-    .replace(/[\\/*?"<>|]+/g, ' ')
-    .replace(/:/g, '-')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return cleaned.length ? cleaned : 'email';
 }
 
 function escapeFrontmatter(input: string): string {

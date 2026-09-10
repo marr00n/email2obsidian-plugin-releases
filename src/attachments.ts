@@ -1,14 +1,21 @@
-/* global console */
-import { Vault, TFile, FileManager, normalizePath } from 'obsidian';
-import type { AttachmentMeta, DownloadAttachment } from './api';
-import { basename, extname, isRootPath } from './path-utils';
+import { Vault, TFile, FileManager } from 'obsidian';
+import type { AttachmentDownload, AttachmentMeta, DownloadAttachment } from './api';
+import { basename, extname } from './path-utils';
+import { mapWithConcurrency } from './concurrency';
+import type { SyncReport } from './sync-report';
 
 export interface SaveAttachmentsOptions {
   vault: Vault;
   fileManager: FileManager;
   sourcePath: string;
-  attachments: AttachmentMeta[];
-  logger?: (msg: string) => void;
+  /**
+   * Non-inline attachments only. The caller partitions the email's attachment
+   * list once (see `writeEmailNote`); anything passed here is downloaded and
+   * saved, inline or not.
+   */
+  nonInlineAttachments: AttachmentMeta[];
+  /** Where per-file failures are warned. Use `silentSyncReport()` to say nothing. */
+  report: SyncReport;
   /** The Service Client's `downloadAttachment`; credentials live in the client. */
   downloader: DownloadAttachment;
 }
@@ -117,8 +124,10 @@ export async function saveBinaryData(opts: {
 }
 
 /**
- * Download and save non-inline attachments to the vault, collision-proofing filenames.
- * Targets the attachment folder when provided, otherwise the note folder.
+ * Download and save the given (already non-inline) attachments to the vault,
+ * collision-proofing filenames. Targets the attachment folder when provided,
+ * otherwise the note folder. The note at `sourcePath` must already exist —
+ * Obsidian resolves relative attachment locations against it.
  */
 export async function saveAttachments(
   opts: SaveAttachmentsOptions
@@ -126,19 +135,20 @@ export async function saveAttachments(
   const {
     vault,
     fileManager,
-    attachments,
+    nonInlineAttachments,
     sourcePath,
-    logger = console.warn,
+    report,
     downloader,
   } = opts;
-
-  const nonInline = attachments.filter((att) => !att.isInline);
 
   const errors: AttachmentSaveError[] = [];
   const savedPathById: Record<number, string> = {};
 
-  const downloads = await runWithConcurrency(
-    nonInline,
+  // No `shouldStop` is passed here, so `mapWithConcurrency` never leaves a
+  // hole: every item runs and lands a defined result at its index. The cast
+  // reflects that guarantee rather than weakening it away.
+  const downloads = (await mapWithConcurrency(
+    nonInlineAttachments,
     3,
     async (att, index) => {
       const baseName = buildAttachmentBase({
@@ -154,12 +164,12 @@ export async function saveAttachments(
         return { att, baseName, downloaded };
       } catch (error) {
         const errObj = toAttachmentSaveError(att, error);
-        logger(`[Email2Obsidian] Attachment ${att.id}: ${errObj.message}`);
+        report.warn(`Attachment ${att.id}: ${errObj.message}`);
         errors.push(errObj);
         return null;
       }
     }
-  );
+  )) as ({ att: AttachmentMeta; baseName: string; downloaded: AttachmentDownload } | null)[];
 
   for (const item of downloads) {
     if (!item || !item.downloaded) continue;
@@ -177,27 +187,12 @@ export async function saveAttachments(
       savedPathById[att.id] = saved.path;
     } catch (error) {
       const errObj = toAttachmentSaveError(att, error);
-      logger(`[Email2Obsidian] Attachment ${att.id}: ${errObj.message}`);
+      report.warn(`Attachment ${att.id}: ${errObj.message}`);
       errors.push(errObj);
     }
   }
 
   return { errors, savedPathById };
-}
-
-export async function ensureFolder(vault: Vault, folder: string): Promise<void> {
-  if (!folder || isRootPath(folder)) {
-    return;
-  }
-  const normalized = normalizePath(folder);
-  try {
-    await vault.createFolder(normalized);
-  } catch (error) {
-    // createFolder throws if exists; ignore that case.
-    if (!(error instanceof Error && /exist/i.test(error.message))) {
-      throw error;
-    }
-  }
 }
 
 function sanitizeAttachmentName(name: string, id?: number): string {
@@ -224,27 +219,4 @@ async function writeBinaryFile(
     return;
   }
   await vault.createBinary(filePath, data);
-}
-
-async function runWithConcurrency<T, R>(
-  items: T[],
-  limit: number,
-  worker: (item: T, index: number) => Promise<R>
-): Promise<R[]> {
-  const results: R[] = [];
-  let current = 0;
-
-  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (true) {
-      const index = current;
-      if (index >= items.length) {
-        break;
-      }
-      current += 1;
-      results[index] = await worker(items[index], index);
-    }
-  });
-
-  await Promise.all(runners);
-  return results;
 }

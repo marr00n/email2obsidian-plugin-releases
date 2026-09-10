@@ -14,6 +14,12 @@ class FakeAbstractFile {
   constructor(p: string) {
     this.path = normalizePath(p);
   }
+
+  /** Mirrors Obsidian's TAbstractFile.name: the last path segment. */
+  get name(): string {
+    const idx = this.path.lastIndexOf('/');
+    return idx === -1 ? this.path : this.path.slice(idx + 1);
+  }
 }
 
 export class TFile extends FakeAbstractFile {
@@ -146,7 +152,7 @@ export class App {
   fileManager: FileManager;
   constructor(vault: Vault) {
     this.vault = vault;
-    this.fileManager = new FileManager();
+    this.fileManager = new FileManager(undefined, vault);
   }
 }
 
@@ -178,11 +184,37 @@ export type AttachmentPathResolver = (name: string, sourcePath: string) => strin
 export class FileManager {
   private resolver: AttachmentPathResolver;
 
-  constructor(resolver?: AttachmentPathResolver) {
+  /**
+   * Pass a resolver to pin down where attachments land; pass a vault (as `App`
+   * does) to get the default "same folder as the source note" resolver.
+   *
+   * The default resolver insists that `sourcePath` actually names a file in
+   * the vault, the way real Obsidian does: `getAvailablePathForAttachment`
+   * resolves the user's attachment-location setting relative to the file at
+   * `sourcePath`, so with no such file there is nothing to resolve against.
+   * A fake that answered from the string alone could not see the ordering bug
+   * of commit d2961b6 (attachments saved before the note existed), and the
+   * regression test for it would pass with the fix deleted.
+   */
+  constructor(resolver?: AttachmentPathResolver, vault?: Vault) {
     this.resolver =
       resolver ??
       ((name: string, sourcePath: string) => {
-        const parent = dirname(normalizePath(sourcePath));
+        if (!vault) {
+          throw new Error(
+            'FileManager fake: construct it with a vault or an explicit resolver.'
+          );
+        }
+        const normalizedSource = normalizePath(sourcePath);
+        const source = vault.getAbstractFileByPath(normalizedSource);
+        if (!(source instanceof TFile)) {
+          throw new Error(
+            `Cannot resolve an attachment path against "${normalizedSource}": ` +
+              'no such file in the vault. Obsidian resolves attachment ' +
+              'locations relative to the source note, so the note must exist first.'
+          );
+        }
+        const parent = dirname(normalizedSource);
         if (!parent) return normalizePath(name);
         return normalizePath(`${parent}/${name}`);
       });
