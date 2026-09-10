@@ -36,8 +36,6 @@ Notes already downloaded under a previous policy stay where they are. The
 plugin never moves or deletes a note in response to a policy change: those
 files are the user's by then, and notes written before this feature carry no
 marker in their frontmatter, so identifying them would cost a `getEmail` call
-per note. Notes written from now on do carry one — `email2obsidianVault`,
-alongside the existing `email2obsidianID`, written on every note and left empty
-for unmarked email — so a future cleanup or re-route feature can work locally
-for everything except that pre-existing tail. With a 72-hour retention window,
-anything not stamped at write time is unrecoverable after three days.
+per note. Notes written from now on do carry one — see
+`0003-notes-record-their-vault-marker.md` — so a future cleanup or re-route
+feature can work locally for everything except that pre-existing tail.
