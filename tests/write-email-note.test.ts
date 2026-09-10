@@ -135,13 +135,14 @@ describe('writeEmailNote', () => {
     expect(noteText(vault, result.notePath)).toContain('email2obsidianVault: "Work"');
   });
 
-  it('leaves frontmatter untouched for an Unmarked Email', async () => {
+  it('stamps an empty Vault Marker for an Unmarked Email rather than omitting the key', async () => {
     const { ctx, vault } = await makeContext();
 
     const result = await writeEmailNote(ctx, email({ vaultMarker: null }));
 
+    // ADR-0003: the key is present on every note so a Bases or Dataview query
+    // over it never needs a null branch.
     const text = noteText(vault, result.notePath);
-    expect(text).not.toContain('email2obsidianVault');
     expect(text).toBe(
       [
         '---',
@@ -149,6 +150,7 @@ describe('writeEmailNote', () => {
         'created: 2026-01-01T00:00:00',
         'tags: [email2obsidian]',
         'email2obsidianID: 1',
+        'email2obsidianVault: ""',
         '---',
         '',
         'Body',

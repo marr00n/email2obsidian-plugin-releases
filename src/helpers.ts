@@ -138,12 +138,11 @@ export async function renderEmailMarkdown(
     `created: ${email.createdAt}`,
     `tags: [${tags.join(', ')}]`,
     `email2obsidianID: ${email.id}`,
-    // ADR-0002: notes written from now on carry the Vault Marker they arrived
-    // under, so a later cleanup or re-route can work locally. An Unmarked
-    // Email gets no line at all.
-    ...(email.vaultMarker
-      ? [`email2obsidianVault: "${escapeFrontmatter(email.vaultMarker)}"`]
-      : []),
+    // ADR-0003: every note carries the Vault Marker it arrived under, so a
+    // later cleanup or re-route can work locally. Written on every note and
+    // left empty for an Unmarked Email rather than omitted, so a query over
+    // the property needs no null branch.
+    `email2obsidianVault: "${escapeFrontmatter(email.vaultMarker ?? '')}"`,
     '---',
   ].join('\n');
 
