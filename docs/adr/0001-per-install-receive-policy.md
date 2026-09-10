@@ -137,14 +137,14 @@ Spans this ADR, `0002-filter-locally-not-on-the-wire.md` and
   controls, the decline readout, the pending-backfill line with its Fetch now
   button, the overlap warning, the Pro label, the plan warning.
 - `src/pipeline.ts` — decide each summary before the `getEmail` call
-  (`src/pipeline.ts:99`), so a decline skips the body and every attachment
-  download. Declined counter into the notice (`src/pipeline.ts:207`). Declined
+  (`src/pipeline.ts:98`), so a decline skips the body and every attachment
+  download. Declined counter into the notice (`src/pipeline.ts:219`). Declined
   ids into the log. Drop the relevant declined entries when markers change.
 - `src/fetch-log-store.ts` — a declined entry needs its marker and timestamp,
   so the backfill count can be computed locally and bounded to the 72-hour
   window.
 - `src/helpers.ts` — `email2obsidianVault` in `renderEmailMarkdown`
-  (`src/helpers.ts:154`).
+  (`src/helpers.ts:159`).
 
 New settings copy must be sentence case; `obsidianmd/ui/sentence-case` already
 accounts for 5 of the 17 existing lint errors.
