@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
 import { openLedger, type LedgerData } from '../src/fetch-ledger';
+import { createReceivePolicy } from '../src/receive-policy';
 import type { EmailSummary } from '../src/api';
 import { App, Plugin, Vault } from 'obsidian';
 
@@ -21,17 +22,23 @@ async function storedLog(plugin: Plugin): Promise<LedgerData> {
   return envelope['fetch-log'] ?? {};
 }
 
-function summary(id: number): EmailSummary {
+function summary(id: number, vaultMarker: string | null = null): EmailSummary {
   return {
     id,
     subject: `Subject ${id}`,
     createdAt: '2021-01-01 00:00:00',
     hashtags: [],
-    vault: null,
+    vaultMarker,
   };
 }
 
 const clock = () => '2021-02-02T00:00:00.000Z';
+/** Inside the service's 72-hour window, measured from `clock`. */
+const RECENT = '2021-02-01T00:00:00.000Z';
+/** Older than the window: the service has deleted this email. */
+const EXPIRED = '2021-01-20T00:00:00.000Z';
+
+const claimsWork = createReceivePolicy({ markers: ['Work'], unmarked: false });
 
 describe('fetch ledger', () => {
   it('loads a log written by the old format, with every entry accepted', async () => {
@@ -44,9 +51,9 @@ describe('fetch ledger', () => {
     expect(ledger.hasSeen(6)).toBe(true);
     expect(ledger.hasSeen(5)).toBe(false);
 
-    // Nothing declined, so a policy change has nothing to drop and the log
-    // survives a commit unchanged.
-    ledger.forgetDeclines();
+    // Nothing declined, so a policy change has nothing to release and the
+    // log survives a commit unchanged.
+    expect(ledger.release(claimsWork)).toBe(0);
     await ledger.commit({ mode: 'fetch-new', cutShort: false });
     expect(await storedLog(plugin)).toEqual({
       '7': { fetchedAt: '2021-01-07T00:00:00.000Z', filename: 'Seven.md' },
@@ -161,16 +168,20 @@ describe('fetch ledger', () => {
     });
   });
 
-  it('records a decline as seen, marked, and readable by the old format', async () => {
+  it('records a decline as seen, with the Vault Marker it arrived under', async () => {
     const plugin = newPlugin();
     const ledger = await openLedger(plugin, { clock });
 
-    ledger.decline(5);
+    ledger.decline(5, 'Art');
+    ledger.decline(4, null);
     expect(ledger.hasSeen(5)).toBe(true);
     await ledger.commit({ mode: 'fetch-new', cutShort: false });
 
     expect(await storedLog(plugin)).toEqual({
-      '5': { fetchedAt: clock(), status: 'declined' },
+      '5': { fetchedAt: clock(), status: 'declined', vaultMarker: 'Art' },
+      // An Unmarked Email declines under the empty marker, not a missing one:
+      // a later release has to tell "was unmarked" from "was not recorded".
+      '4': { fetchedAt: clock(), status: 'declined', vaultMarker: '' },
     });
 
     // Reloading sees it as declined and still as dealt with.
@@ -179,29 +190,177 @@ describe('fetch ledger', () => {
     expect(reopened.shouldStopScan([summary(5)])).toBe(true);
   });
 
-  it('forgets declines only, leaving accepted entries in place', async () => {
+  it('releases only the declines the new policy claims, leaving the rest alone', async () => {
     const plugin = newPlugin();
     await plugin.saveData({
       'fetch-log': {
-        '7': { fetchedAt: '2021-01-07T00:00:00.000Z', filename: 'Seven.md' },
-        '6': { fetchedAt: '2021-01-06T00:00:00.000Z', status: 'declined' },
+        '9': { fetchedAt: RECENT, filename: 'Nine.md' },
+        '8': { fetchedAt: RECENT, status: 'declined', vaultMarker: 'Work' },
+        '7': { fetchedAt: RECENT, status: 'declined', vaultMarker: 'Art' },
+        '6': { fetchedAt: RECENT, status: 'declined', vaultMarker: '' },
       },
     });
     const ledger = await openLedger(plugin, { clock });
 
-    ledger.decline(5);
-    expect(ledger.hasSeen(6)).toBe(true);
+    // The markers setting has just grown a `Work` entry.
+    expect(ledger.release(claimsWork)).toBe(1);
 
-    ledger.forgetDeclines();
-    expect(ledger.hasSeen(6)).toBe(false);
-    expect(ledger.hasSeen(5)).toBe(false);
+    // 8 is back in play; the accepted note and the still-unclaimed declines
+    // are untouched.
+    expect(ledger.hasSeen(8)).toBe(false);
+    expect(ledger.hasSeen(9)).toBe(true);
     expect(ledger.hasSeen(7)).toBe(true);
+    expect(ledger.hasSeen(6)).toBe(true);
+  });
 
-    // Dropping declines is worth a write even though nothing was accepted.
+  it('matches a released marker case-insensitively and releases an unmarked decline on its own toggle', async () => {
+    const plugin = newPlugin();
+    await plugin.saveData({
+      'fetch-log': {
+        '8': { fetchedAt: RECENT, status: 'declined', vaultMarker: 'WORK' },
+        '6': { fetchedAt: RECENT, status: 'declined', vaultMarker: '' },
+      },
+    });
+    const ledger = await openLedger(plugin, { clock });
+
+    expect(
+      ledger.release(createReceivePolicy({ markers: ['  work  '], unmarked: true }))
+    ).toBe(2);
+    expect(ledger.hasSeen(8)).toBe(false);
+    expect(ledger.hasSeen(6)).toBe(false);
+  });
+
+  it('leaves a decline the service has already deleted where it is', async () => {
+    const plugin = newPlugin();
+    await plugin.saveData({
+      'fetch-log': {
+        '8': { fetchedAt: RECENT, status: 'declined', vaultMarker: 'Work' },
+        // Declined outside the 72-hour retention window: widening the markers
+        // cannot bring back an email the service no longer holds, and hunting
+        // for it would only make every later scan read further.
+        '3': { fetchedAt: EXPIRED, status: 'declined', vaultMarker: 'Work' },
+      },
+    });
+    const ledger = await openLedger(plugin, { clock });
+
+    expect(ledger.release(claimsWork)).toBe(1);
+    expect(ledger.hasSeen(8)).toBe(false);
+    expect(ledger.hasSeen(3)).toBe(true);
+  });
+
+  it('releases a decline recorded without a marker, since it cannot be ruled out', async () => {
+    const plugin = newPlugin();
+    await plugin.saveData({
+      'fetch-log': { '8': { fetchedAt: RECENT, status: 'declined' } },
+    });
+    const ledger = await openLedger(plugin, { clock });
+
+    expect(ledger.release(claimsWork)).toBe(1);
+    expect(ledger.hasSeen(8)).toBe(false);
+  });
+
+  it('keeps the scan running until every released id has been met again', async () => {
+    const plugin = newPlugin();
+    await plugin.saveData({
+      'fetch-log': {
+        '9': { fetchedAt: RECENT, filename: 'Nine.md' },
+        '8': { fetchedAt: RECENT, filename: 'Eight.md' },
+        '7': { fetchedAt: RECENT, status: 'declined', vaultMarker: 'Work' },
+        '6': { fetchedAt: RECENT, filename: 'Six.md' },
+      },
+    });
+    const ledger = await openLedger(plugin, { clock });
+    ledger.release(claimsWork);
+
+    // Page one is nothing but known email, which would normally stop the scan
+    // dead — but 7 is two pages back and this run exists to fetch it.
+    expect(ledger.shouldStopScan([summary(9), summary(8)])).toBe(false);
+    // Reaching 7 settles the debt, so this page stops the scan as usual.
+    expect(ledger.shouldStopScan([summary(7, 'Work'), summary(6)])).toBe(true);
+  });
+
+  it('drops a released id the service never returned, so the next run stops scanning early again', async () => {
+    const plugin = newPlugin();
+    await plugin.saveData({
+      'fetch-log': {
+        '9': { fetchedAt: RECENT, filename: 'Nine.md' },
+        '7': { fetchedAt: RECENT, status: 'declined', vaultMarker: 'Work' },
+      },
+    });
+    const ledger = await openLedger(plugin, { clock });
+    ledger.release(claimsWork);
+
+    // The run scanned the stream out and 7 was never in it: the service had
+    // already deleted it. Holding on to it would make every future run read
+    // the whole stream hunting for an email that no longer exists.
     await ledger.commit({ mode: 'fetch-new', cutShort: false });
     expect(await storedLog(plugin)).toEqual({
-      '7': { fetchedAt: '2021-01-07T00:00:00.000Z', filename: 'Seven.md' },
+      '9': { fetchedAt: RECENT, filename: 'Nine.md' },
     });
+
+    const reopened = await openLedger(plugin, { clock });
+    expect(reopened.shouldStopScan([summary(9)])).toBe(true);
+  });
+
+  it('keeps a released id that the run went on to import', async () => {
+    const plugin = newPlugin();
+    await plugin.saveData({
+      'fetch-log': {
+        '7': { fetchedAt: RECENT, status: 'declined', vaultMarker: 'Work' },
+      },
+    });
+    const ledger = await openLedger(plugin, { clock });
+    ledger.release(claimsWork);
+    ledger.accept(7, 'Seven.md');
+
+    await ledger.commit({ mode: 'fetch-new', cutShort: false });
+    expect(await storedLog(plugin)).toEqual({
+      '7': { fetchedAt: clock(), filename: 'Seven.md' },
+    });
+  });
+
+  it('counts what a proposed marker list would release, per marker, without touching the log', async () => {
+    const plugin = newPlugin();
+    await plugin.saveData({
+      'fetch-log': {
+        '9': { fetchedAt: RECENT, filename: 'Nine.md' },
+        '8': { fetchedAt: RECENT, status: 'declined', vaultMarker: 'Art' },
+        '7': { fetchedAt: RECENT, status: 'declined', vaultMarker: 'art' },
+        '6': { fetchedAt: RECENT, status: 'declined', vaultMarker: 'Work' },
+        '5': { fetchedAt: RECENT, status: 'declined', vaultMarker: '' },
+        '3': { fetchedAt: EXPIRED, status: 'declined', vaultMarker: 'Art' },
+      },
+    });
+    const ledger = await openLedger(plugin, { clock });
+
+    const pending = ledger.pendingRelease(
+      createReceivePolicy({ markers: ['Art; Work'], unmarked: false })
+    );
+
+    // 3 is outside the retention window and 5 is unmarked with the toggle off.
+    expect(pending.total).toBe(3);
+    expect(pending.byMarker).toEqual([
+      { marker: 'Art', count: 2 },
+      { marker: 'Work', count: 1 },
+    ]);
+
+    // A question, not a decision: the declines are all still declined.
+    expect(ledger.hasSeen(8)).toBe(true);
+    expect(ledger.hasSeen(6)).toBe(true);
+  });
+
+  it('counts nothing pending when the proposed policy claims no declined email', async () => {
+    const plugin = newPlugin();
+    await plugin.saveData({
+      'fetch-log': {
+        '8': { fetchedAt: RECENT, status: 'declined', vaultMarker: 'Art' },
+      },
+    });
+    const ledger = await openLedger(plugin, { clock });
+
+    const pending = ledger.pendingRelease(claimsWork);
+    expect(pending.total).toBe(0);
+    expect(pending.byMarker).toEqual([]);
   });
 
   it('routes a load failure through a supplied warn instead of console.warn', async () => {
