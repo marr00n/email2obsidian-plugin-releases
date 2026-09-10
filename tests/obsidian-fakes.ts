@@ -146,6 +146,7 @@ export class Setting {}
 export class SuggestModal<T> {}
 export class PluginSettingTab {}
 export class ButtonComponent {}
+export class ToggleComponent {}
 
 export class App {
   vault: Vault;

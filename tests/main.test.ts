@@ -77,7 +77,10 @@ describe('main normalization helpers', () => {
     expect(normalizeSettings({ apiKey: 'k', vaultMarkers: 42 }).vaultMarkers).toEqual([]);
   });
 
-  it('keeps the unmarked answer live whatever the marker list says', () => {
+  it('keeps the unmarked answer stored even while blank markers make it inapplicable', () => {
+    // The settings tab disables the toggle when markers are blank, and the
+    // policy stops reading it — but the answer itself survives, so filling
+    // the markers field back in restores the user's own choice.
     expect(
       normalizeSettings({ apiKey: 'k', vaultMarkers: [], receiveUnmarked: false })
         .receiveUnmarked

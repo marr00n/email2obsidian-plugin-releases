@@ -7,17 +7,22 @@ import type { EmailSummary } from './api';
  * each one claims out of it — this module is that answer, and the only place
  * a Vault Marker is compared to anything.
  *
- * Two independent questions, because the user asked for them as two (ADR
- * 0001):
+ * Two questions, asked as two controls (ADR 0001):
  *
  *   1. Which *marked* email does this Obsidian Vault take? An empty marker
  *      list is the absence of a filter — every marker — not an empty allow
  *      list that claims nothing. That is what makes the shipped default
  *      byte-identical to the plugin's pre-multi-vault behaviour, so an
  *      install upgrades in silence with no migration and no first-run prompt.
- *   2. Does it take Unmarked Email? A plain yes/no, live whatever the marker
- *      list says. Answering it inside the marker list is what made the
- *      rejected wildcard design have a dead field in it.
+ *   2. Does it take Unmarked Email? A plain yes/no — but only a question at
+ *      all once the first question has been answered. An empty marker list
+ *      means this vault takes the whole stream, and there is nothing left for
+ *      a second filter to exclude, so `unmarked` is not consulted. Settings
+ *      disables the toggle and shows it on in that state rather than leaving
+ *      a control that moves and changes nothing: that dead-field defect is
+ *      what sank the rejected wildcard design, and it would be no better
+ *      here. The stored answer survives untouched, so filling the marker
+ *      list in again brings the user's own choice back.
  *
  * Markers are compared case-insensitively (`CONTEXT.md`): `Work` and `work`
  * name the same Obsidian Vault, and a shifted key should not lose mail.
@@ -63,7 +68,10 @@ export interface ReceivePolicyOptions {
    * every marked email is claimed.
    */
   markers?: string[];
-  /** Whether Unmarked Email is claimed. Defaults to true. */
+  /**
+   * Whether Unmarked Email is claimed. Defaults to true, and is not read at
+   * all when `markers` is empty — see the note on the second question above.
+   */
   unmarked?: boolean;
 }
 
@@ -75,12 +83,24 @@ export function createReceivePolicy(
 
   return {
     claims(vaultMarker) {
-      if (isUnmarked(vaultMarker)) return unmarked;
-      // No markers configured is no filter at all, not an empty allow list.
+      // No markers configured is no filter at all, not an empty allow list —
+      // and with no filter there is nothing for the unmarked answer to
+      // narrow, so it is not read. Settings shows that by disabling the
+      // toggle rather than letting it move without effect.
       if (!markers.size) return true;
+      if (isUnmarked(vaultMarker)) return unmarked;
       return markers.has(foldCase(vaultMarker));
     },
   };
+}
+
+/**
+ * Whether this install filters by Vault Marker at all. False is the whole
+ * stream, and the state in which the unmarked answer has nothing to do — the
+ * settings tab reads this to decide whether that toggle is live.
+ */
+export function filtersByMarker(markers: string[] | undefined): boolean {
+  return parseVaultMarkers(markers).length > 0;
 }
 
 /**

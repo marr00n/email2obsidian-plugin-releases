@@ -487,14 +487,16 @@ describe('pipeline runSync receive policy', () => {
     }
   });
 
-  it('turns away unmarked email on its own toggle, whatever the marker list says', async () => {
+  it('takes the whole stream on blank markers even with the unmarked answer stored as off', async () => {
     const vault = new Vault();
     const plugin = new Plugin(new App(vault));
     const server = fakeServer([mixedStream()]);
 
-    // Blank markers is no marker filter, but the unmarked question is asked
-    // separately and answered no — so every marked email arrives and the
-    // unmarked one does not.
+    // A blank markers field takes everything, so there is nothing for the
+    // unmarked answer to narrow and it is not read. Settings disables the
+    // toggle in this state rather than letting it move without effect, and
+    // this is the behaviour that makes disabling it honest — a stored `false`
+    // left over from when markers were filled in must not quietly bite.
     const result = await runSync({
       mode: 'fetch-new',
       settings: settings({ vaultMarkers: [], receiveUnmarked: false }),
@@ -503,8 +505,29 @@ describe('pipeline runSync receive policy', () => {
       client: createE2oClient({ apiKey: 'k', http: server.http }),
     });
 
-    expect(result.synced).toBe(3);
-    expect(result.declined).toBe(1);
+    expect(result.synced).toBe(4);
+    expect(result.declined).toBe(0);
+    expect(noteExists(vault, 'Notes/Unmarked one.md')).toBe(true);
+  });
+
+  it('turns away unmarked email once a marker list gives that answer something to do', async () => {
+    const vault = new Vault();
+    const plugin = new Plugin(new App(vault));
+    const server = fakeServer([mixedStream()]);
+
+    const result = await runSync({
+      mode: 'fetch-new',
+      settings: settings({ vaultMarkers: ['Work', 'Art'], receiveUnmarked: false }),
+      vault,
+      plugin,
+      client: createE2oClient({ apiKey: 'k', http: server.http }),
+    });
+
+    expect(result.synced).toBe(2);
+    expect(result.declinedByMarker).toEqual([
+      { marker: '', count: 1 },
+      { marker: 'Second Brain', count: 1 },
+    ]);
     expect(noteExists(vault, 'Notes/For art.md')).toBe(true);
     expect(noteExists(vault, 'Notes/Unmarked one.md')).toBe(false);
   });

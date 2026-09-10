@@ -36,8 +36,10 @@ _Avoid_: filename helper, safeFilename, name lock, existing-names set
 **Receive Policy**:
 What one install claims out of the stream every install reads: the Vault
 Markers this Obsidian Vault accepts, and whether it accepts Unmarked Email.
-Two independent answers. An empty marker list is the absence of a filter —
-every marker — never an empty allow list that claims nothing.
+An empty marker list is the absence of a filter — every marker, Unmarked Email
+included — never an empty allow list that claims nothing. The unmarked answer
+only applies once the marker list narrows something, which is why settings
+disables that toggle while the list is blank.
 _Avoid_: filter, allow list, whitelist, routing rules, vault config
 
 **Fetch Ledger**:

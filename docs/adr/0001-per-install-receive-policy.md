@@ -17,7 +17,9 @@ using two settings:
   this vault accepts. **Blank means every marker**: it is the absence of a
   filter, not an empty allow list.
 - **Unmarked emails** — a toggle, defaulting to on, for email carrying no
-  marker at all.
+  marker at all. It is disabled, and shown on, while Markers is blank: a blank
+  field takes the whole stream, so there is nothing for this answer to narrow.
+  The stored answer survives, so refilling Markers restores the user's choice.
 
 ```
 Vault markers                                          [Pro]
@@ -29,8 +31,10 @@ Markers          [ Work; Second Brain                       ]
                  other vaults.
                  Last fetch declined: Art (4), Wrok (1)
 
-Unmarked emails                                          [ON]
-                 Emails sent without a marker.
+Unmarked emails                                   [ON, dimmed]
+                 Unmarked emails always arrive while the markers field
+                 is blank, because a blank field takes everything.
+                 List a marker above to choose.
 ```
 
 All copy above is placeholder; see Not yet decided.
@@ -40,8 +44,21 @@ the pre-feature behaviour. Existing installs upgrade silently, no migration
 runs, and no first-run prompt interrupts the majority of users who have one
 vault and no interest in this feature.
 
-Which markers a vault takes, and whether it takes unmarked email, are
-orthogonal questions, so they are two controls rather than options within one.
+Which markers a vault takes, and whether it takes unmarked email, are separate
+questions, so they are two controls rather than options within one. They are
+not fully orthogonal: the second only arises once the first has narrowed
+something. With Markers blank the vault takes the whole stream and the
+unmarked answer has nothing to exclude, so the toggle is disabled rather than
+left to move without effect. A control that moves and changes nothing is the
+dead-field defect that sank the wildcard option below, and it would be no
+better here for being in a different corner of the panel.
+
+The state a disabled toggle removes — blank Markers with unmarked off, meaning
+"every marker but nothing unmarked" — is reachable by listing the markers
+explicitly. That list cannot stay complete on its own, since a marker the user
+has not sent to in 72 hours is undiscoverable, so the two are not strictly
+equivalent. Listing them is nonetheless a deliberate act, and preferable to a
+control whose effect depends on the state of another.
 
 ## Considered Options
 
@@ -170,15 +187,21 @@ Settled while implementing:
 
 ## History
 
-Implemented 2026-09-10 (issue #14). The implementation follows this ADR; where
-it differs from the spec written from it, this ADR was the one that was right.
-Two points worth recording. The unmarked toggle stays live when the marker list
-is blank, as the two-orthogonal-controls decision above requires — the spec's
-matching rule had blank markers claiming everything unconditionally, which
-would have made the toggle dead in exactly the case a catch-all vault uses.
-And the ledger stores no policy configuration of its own: the marker on each
-declined entry is enough to answer what the current policy claims, so the
-release is correct whichever device made the correction.
+Implemented 2026-09-10 (issue #14).
+
+The blank-markers case was reopened during implementation. The first cut kept
+the unmarked toggle live throughout, so blank markers with unmarked off meant
+"every marker, nothing unmarked". That state is reachable by listing markers
+explicitly, and the owner judged the extra state not worth having; disabling
+the toggle while Markers is blank was chosen instead. Either way the toggle
+never moves without effect — that was the constraint, and the two-controls
+decision above now records which side of it this design sits on. Issue #14's
+matching rule ("or when the list is empty") is what the code does.
+
+Also recorded: the ledger stores no policy configuration of its own, though
+the spec asked for one. The marker on each declined entry is enough to answer
+what the current policy claims, so the release is correct whichever device
+made the correction, with no second source of truth to fall out of step.
 
 Revised 2026-09-09. The original decision was a three-way radio group with one
 marker per install, chosen from a facet-seeded dropdown prefilled with the

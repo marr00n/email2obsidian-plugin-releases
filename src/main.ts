@@ -6,6 +6,7 @@ import {
   Plugin,
   PluginSettingTab,
   Setting,
+  ToggleComponent,
   normalizePath,
 } from 'obsidian';
 import { ApiError, createE2oClient, type E2oClient } from './api';
@@ -14,6 +15,7 @@ import { openLedger, type PendingRelease } from './fetch-ledger';
 import { isRootPath } from './path-utils';
 import {
   describeDeclines,
+  filtersByMarker,
   formatVaultMarkers,
   parseVaultMarkers,
   receivePolicyFor,
@@ -267,6 +269,16 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
   private releaseButton: ButtonComponent | null = null;
   /** Guards against an earlier keystroke's slower read landing last. */
   private releaseToken = 0;
+  /** Held for the same reason: it turns live as the markers field fills in. */
+  private unmarkedSetting: Setting | null = null;
+  private unmarkedToggle: ToggleComponent | null = null;
+  /**
+   * Obsidian's `ToggleComponent.setValue` fires `onChange`, so redrawing the
+   * toggle would otherwise save the value it is only displaying — and
+   * overwrite the answer the user gave while their markers were still filled
+   * in. Set while this tab drives the control itself.
+   */
+  private redrawingUnmarked = false;
 
   constructor(app: App, plugin: Email2ObsidianPlugin) {
     super(app, plugin);
@@ -482,20 +494,24 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
         text.setValue(formatVaultMarkers(settings.vaultMarkers));
         text.onChange(async (value) => {
           await this.plugin.updateSettings({ vaultMarkers: parseVaultMarkers(value) });
+          // Typing the first marker is what gives the unmarked question
+          // something to do; clearing the last one takes it away again.
+          this.refreshUnmarkedControl();
           await this.refreshPendingRelease();
         });
       });
 
-    new Setting(containerEl)
+    this.unmarkedSetting = new Setting(containerEl)
       .setName('Unmarked emails')
-      .setDesc('Take emails sent without a marker. Independent of the list above.')
       .addToggle((toggle) => {
-        toggle.setValue(settings.receiveUnmarked);
+        this.unmarkedToggle = toggle;
         toggle.onChange(async (value) => {
+          if (this.redrawingUnmarked) return;
           await this.plugin.updateSettings({ receiveUnmarked: value });
           await this.refreshPendingRelease();
         });
       });
+    this.refreshUnmarkedControl();
 
     this.releaseSetting = new Setting(containerEl)
       .setName('Held-back email')
@@ -520,6 +536,35 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
             'above have nothing to match until vault routing is enabled.'
         );
     }
+  }
+
+  /**
+   * The unmarked question only exists once the markers field narrows anything.
+   * A blank field means this vault takes the whole stream, so the toggle reads
+   * on and goes dead rather than moving without effect — the dead-field defect
+   * that sank the wildcard design (ADR 0001).
+   *
+   * The stored answer is left alone, so filling the markers field back in
+   * restores the user's own choice rather than a default.
+   */
+  private refreshUnmarkedControl(): void {
+    const setting = this.unmarkedSetting;
+    const toggle = this.unmarkedToggle;
+    if (setting === null || toggle === null) return;
+
+    const filtering = filtersByMarker(this.plugin.settings.vaultMarkers);
+    setting.setDesc(
+      filtering
+        ? 'Take emails sent without a marker.'
+        : 'Unmarked emails always arrive while the markers field is blank, ' +
+            'because a blank field takes everything. List a marker above to ' +
+            'choose.'
+    );
+
+    this.redrawingUnmarked = true;
+    toggle.setValue(filtering ? this.plugin.settings.receiveUnmarked : true);
+    toggle.setDisabled(!filtering);
+    this.redrawingUnmarked = false;
   }
 
   /**
