@@ -39,7 +39,7 @@ export const MARKER_SEPARATOR = ';';
 export const UNMARKED_KEY = '';
 
 /** What an Unmarked Email is called in text the user reads. */
-export const UNMARKED_LABEL = 'no marker';
+export const UNMARKED_TEXT = 'no marker';
 
 /** A Vault Marker and how many emails arrived under it. */
 export interface MarkerCount {
@@ -60,10 +60,9 @@ export interface ReceivePolicy {
 export interface ReceivePolicyOptions {
   /**
    * The Vault Markers this install claims. Empty means *no marker filter* —
-   * every marked email is claimed. Accepts the raw settings string too, so a
-   * caller need not parse first.
+   * every marked email is claimed.
    */
-  markers?: string[] | string | null;
+  markers?: string[];
   /** Whether Unmarked Email is claimed. Defaults to true. */
   unmarked?: boolean;
 }
@@ -82,6 +81,22 @@ export function createReceivePolicy(
       return markers.has(foldCase(vaultMarker));
     },
   };
+}
+
+/**
+ * The policy an install's settings describe. The two fields always travel
+ * together, so they are read in one place rather than paired up at each call
+ * site; both are optional because an install that has never seen this feature
+ * has neither, and that absence means "receive everything".
+ */
+export function receivePolicyFor(settings: {
+  vaultMarkers?: string[];
+  receiveUnmarked?: boolean;
+}): ReceivePolicy {
+  return createReceivePolicy({
+    markers: settings.vaultMarkers,
+    unmarked: settings.receiveUnmarked,
+  });
 }
 
 /**
@@ -132,8 +147,8 @@ export function formatVaultMarkers(markers: string[]): string {
 }
 
 /** A Vault Marker as the user reads it, Unmarked Email included. */
-export function markerLabel(vaultMarker: string | null | undefined): string {
-  return isUnmarked(vaultMarker) ? UNMARKED_LABEL : vaultMarker;
+export function markerText(vaultMarker: string | null | undefined): string {
+  return isUnmarked(vaultMarker) ? UNMARKED_TEXT : vaultMarker;
 }
 
 /**
@@ -159,14 +174,14 @@ export function tallyMarkers(
 
   return Array.from(counts.values()).sort(
     (a, b) =>
-      b.count - a.count || markerLabel(a.marker).localeCompare(markerLabel(b.marker))
+      b.count - a.count || markerText(a.marker).localeCompare(markerText(b.marker))
   );
 }
 
 /** `Art (4), Wrok (1)` — what settings shows about the last fetch. */
 export function describeDeclines(counts: MarkerCount[]): string {
   return counts
-    .map((entry) => `${markerLabel(entry.marker)} (${entry.count})`)
+    .map((entry) => `${markerText(entry.marker)} (${entry.count})`)
     .join(', ');
 }
 

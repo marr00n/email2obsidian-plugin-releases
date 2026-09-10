@@ -13,10 +13,10 @@ import { runSync, SyncMode } from './pipeline';
 import { openLedger, type PendingRelease } from './fetch-ledger';
 import { isRootPath } from './path-utils';
 import {
-  createReceivePolicy,
   describeDeclines,
   formatVaultMarkers,
   parseVaultMarkers,
+  receivePolicyFor,
   type MarkerCount,
 } from './receive-policy';
 import { createSyncReport, prefixedWarn, type SyncReport } from './sync-report';
@@ -528,10 +528,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
     const token = (this.releaseToken += 1);
     const ledger = await openLedger(this.plugin, { warn: prefixedWarn });
     const pending: PendingRelease = ledger.pendingRelease(
-      createReceivePolicy({
-        markers: this.plugin.settings.vaultMarkers,
-        unmarked: this.plugin.settings.receiveUnmarked,
-      })
+      receivePolicyFor(this.plugin.settings)
     );
 
     // A slower read from an earlier keystroke must not overwrite a later one.

@@ -9,8 +9,8 @@ import { basename } from './path-utils';
 import { mapWithConcurrency } from './concurrency';
 import { silentSyncReport, type SyncReport } from './sync-report';
 import {
-  createReceivePolicy,
   hasStarterSignature,
+  receivePolicyFor,
   tallyMarkers,
   type MarkerCount,
 } from './receive-policy';
@@ -87,10 +87,7 @@ export async function runSync(opts: SyncOptions): Promise<SyncResult> {
     warn: (msg, ...details) => report.warn(msg, ...details),
   });
 
-  const policy = createReceivePolicy({
-    markers: settings.vaultMarkers,
-    unmarked: settings.receiveUnmarked,
-  });
+  const policy = receivePolicyFor(settings);
 
   // Recovery is the sync's job, not the settings panel's: whatever this
   // install's markers say *now* is read against what each decline recorded,
@@ -190,6 +187,16 @@ export async function runSync(opts: SyncOptions): Promise<SyncResult> {
   let accepted = 0;
   const errors: string[] = [];
   const attachmentErrors: AttachmentSaveError[] = [];
+  /** The run as it stands — the same shape whether it finished or was cut. */
+  const result = (): SyncResult => ({
+    synced: accepted,
+    skipped,
+    declined: declinedMarkers.length,
+    declinedByMarker,
+    starterSignature,
+    errors,
+    attachmentErrors,
+  });
   for (const outcome of outcomes) {
     // Items the pool never started (skipped once `rateLimited` flipped) leave
     // a hole here.
@@ -208,15 +215,7 @@ export async function runSync(opts: SyncOptions): Promise<SyncResult> {
     report.notice(message);
     report.warn(message);
     await ledger.commit({ mode, cutShort: true });
-    return {
-      synced: accepted,
-      skipped,
-      declined: declinedMarkers.length,
-      declinedByMarker,
-      starterSignature,
-      errors,
-      attachmentErrors,
-    };
+    return result();
   }
 
   const commitStart = Date.now();
@@ -236,15 +235,7 @@ export async function runSync(opts: SyncOptions): Promise<SyncResult> {
   ].join(', ');
   report.notice(`Email2Obsidian Sync summary: ${summary}.`);
 
-  return {
-    synced: accepted,
-    skipped,
-    declined: declinedMarkers.length,
-    declinedByMarker,
-    starterSignature,
-    errors,
-    attachmentErrors,
-  };
+  return result();
 }
 
 /**
