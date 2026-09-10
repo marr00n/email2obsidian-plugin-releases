@@ -5,9 +5,9 @@ installs cannot see each other — settings and the fetch log both live in
 `plugin.saveData`, scoped to one Obsidian Vault — so no cross-install rule can
 be enforced. Each install therefore decides for itself, using two settings:
 
-- **Markers** — a free-text, comma-separated list of the Vault Markers this
-  vault accepts. **Blank means every marker**: it is the absence of a filter,
-  not an empty allow list.
+- **Markers** — a free-text, semicolon-separated list of the Vault Markers
+  this vault accepts. **Blank means every marker**: it is the absence of a
+  filter, not an empty allow list.
 - **Unmarked emails** — a toggle, defaulting to on, for email carrying no
   marker at all.
 
@@ -46,9 +46,9 @@ vault and no interest in this feature.
 ## Consequences
 
 Markers are matched case-insensitively after trimming. The field parses on
-comma boundaries, because markers may legally contain spaces (`Second Brain`)
-and so whitespace cannot be the separator, while commas are not legal inside a
-marker.
+semicolon boundaries, because markers may legally contain spaces
+(`Second Brain`) and so whitespace cannot be the separator, while a semicolon is
+not legal inside a marker.
 
 There is an allow list but no deny list. A vault cannot say "everything except
 Art"; a user wanting that must list what they do want.
