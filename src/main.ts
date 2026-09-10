@@ -410,15 +410,41 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
       .setName('Tips');
 
     const tipsDesc = document.createDocumentFragment();
-    const tipsLine1 = document.createElement('p');
-    tipsLine1.textContent =
-      'Currently, only emails received from your registered email address will be processed.';
-    tipsDesc.appendChild(tipsLine1);
+    const tipsList = document.createElement('ul');
+    tipsDesc.appendChild(tipsList);
 
-    const tipsLine2 = document.createElement('p');
-    tipsLine2.textContent =
-      'Tags are supported; both in the subject line and the note body. Tags in the email subject are added to the frontmatter, tags within the email body are not.';
-    tipsDesc.appendChild(tipsLine2);
+    /** The literal syntax a tip is telling the user to type. */
+    const code = (text: string): HTMLElement => {
+      const el = document.createElement('code');
+      el.textContent = text;
+      return el;
+    };
+    const addTip = (...parts: (string | Node)[]): void => {
+      const item = document.createElement('li');
+      item.append(...parts);
+      tipsList.appendChild(item);
+    };
+
+    addTip(
+      'Email Security: Only emails sent from your registered email address are processed.'
+    );
+    addTip(
+      'Vault Routing: Direct a note to a specific vault using ',
+      code('@@VaultName'),
+      ' or ',
+      code('@@"Vault Name"'),
+      ' in the email subject. A space must precede ',
+      code('@@'),
+      '. (Pro plans only)'
+    );
+    addTip(
+      'Hashtags: Add ',
+      code('#tags'),
+      " anywhere in your subject line or note body. Tags in the subject line are added to the note's frontmatter, while body tags remain in the body content. Multiple tags are supported, and spaces within multi-word tags are converted to underscores (e.g. ",
+      code('#follow_up'),
+      ').'
+    );
+    addTip('Attachments: Inline and file attachments are supported.');
 
     const tipsLine3 = document.createElement('p');
     const tipsLink = document.createElement('a');
