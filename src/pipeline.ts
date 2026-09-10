@@ -8,10 +8,24 @@ import { resolveNoteFolder } from './note-folder';
 import { basename } from './path-utils';
 import { mapWithConcurrency } from './concurrency';
 import { silentSyncReport, type SyncReport } from './sync-report';
+import {
+  hasStarterSignature,
+  receivePolicyFor,
+  tallyMarkers,
+  type MarkerCount,
+} from './receive-policy';
 
 export interface PipelineSettings {
   apiKey: string;
   notesFolder: string;
+  /**
+   * The Vault Markers this Obsidian Vault claims. Absent or empty is *no
+   * marker filter* — every marked email is claimed — which is what makes an
+   * install that has never seen this feature behave exactly as it always did.
+   */
+  vaultMarkers?: string[];
+  /** Whether Unmarked Email is claimed. Absent means yes, as it always was. */
+  receiveUnmarked?: boolean;
 }
 
 export type { SyncMode };
@@ -34,6 +48,16 @@ export interface SyncOptions {
 export interface SyncResult {
   synced: number;
   skipped: number;
+  /** Emails this run turned away because they were not for this vault. */
+  declined: number;
+  /** Which Vault Markers they arrived under, commonest first. */
+  declinedByMarker: MarkerCount[];
+  /**
+   * The run saw an email the service left unmarked whose subject still
+   * carries its `@@` token — the one signature of an account without vault
+   * routing. A flag for settings to explain, nothing more (ADR 0001).
+   */
+  starterSignature: boolean;
   errors: string[];
   attachmentErrors: AttachmentSaveError[];
 }
@@ -63,6 +87,20 @@ export async function runSync(opts: SyncOptions): Promise<SyncResult> {
     warn: (msg, ...details) => report.warn(msg, ...details),
   });
 
+  const policy = receivePolicyFor(settings);
+
+  // Recovery is the sync's job, not the settings panel's: whatever this
+  // install's markers say *now* is read against what each decline recorded,
+  // so a correction typed on one device takes effect on whichever device next
+  // syncs, and there is one code path that can be wrong rather than two.
+  // fetch-all re-reads everything anyway and rewrites the ledger from scratch.
+  if (mode === 'fetch-new') {
+    const released = ledger.release(policy);
+    if (released) {
+      report.debug(`receive policy released ${released} previously declined emails`);
+    }
+  }
+
   const { emails: emailSummaries, stoppedEarly } = await paginateEmails(client, report, {
     // fetch-all wants the whole stream; only fetch-new leans on the ledger's
     // contiguity to stop scanning.
@@ -77,6 +115,26 @@ export async function runSync(opts: SyncOptions): Promise<SyncResult> {
   const skipped = mode === 'fetch-new' ? emailSummaries.length - selected.length : 0;
   report.debug(
     `selection: mode=${mode}, total summaries=${emailSummaries.length}, selected=${selected.length}, skipped=${skipped}, stoppedEarly=${stoppedEarly}`
+  );
+
+  // The receive decision is made here, on the summary, before any detail
+  // request: a declined email must cost no body and no attachment download.
+  const claimed: EmailSummary[] = [];
+  const declinedMarkers: (string | null)[] = [];
+  let starterSignature = false;
+  for (const summary of selected) {
+    if (hasStarterSignature(summary)) starterSignature = true;
+    if (policy.claims(summary.vaultMarker)) {
+      claimed.push(summary);
+      continue;
+    }
+    ledger.decline(summary.id, summary.vaultMarker);
+    declinedMarkers.push(summary.vaultMarker);
+  }
+
+  const declinedByMarker = tallyMarkers(declinedMarkers);
+  report.debug(
+    `receive policy: claimed=${claimed.length}, declined=${declinedMarkers.length}`
   );
 
   const noteContext: WriteEmailNoteContext = {
@@ -95,7 +153,7 @@ export async function runSync(opts: SyncOptions): Promise<SyncResult> {
   let rateLimited = false;
 
   const outcomes = await mapWithConcurrency<EmailSummary, EmailSyncOutcome>(
-    selected,
+    claimed,
     2,
     async (summary) => {
       try {
@@ -129,6 +187,16 @@ export async function runSync(opts: SyncOptions): Promise<SyncResult> {
   let accepted = 0;
   const errors: string[] = [];
   const attachmentErrors: AttachmentSaveError[] = [];
+  /** The run as it stands — the same shape whether it finished or was cut. */
+  const result = (): SyncResult => ({
+    synced: accepted,
+    skipped,
+    declined: declinedMarkers.length,
+    declinedByMarker,
+    starterSignature,
+    errors,
+    attachmentErrors,
+  });
   for (const outcome of outcomes) {
     // Items the pool never started (skipped once `rateLimited` flipped) leave
     // a hole here.
@@ -147,7 +215,7 @@ export async function runSync(opts: SyncOptions): Promise<SyncResult> {
     report.notice(message);
     report.warn(message);
     await ledger.commit({ mode, cutShort: true });
-    return { synced: accepted, skipped, errors, attachmentErrors };
+    return result();
   }
 
   const commitStart = Date.now();
@@ -156,11 +224,18 @@ export async function runSync(opts: SyncOptions): Promise<SyncResult> {
     `fetch ledger committed (${mode}) with ${accepted} entries in ${Date.now() - commitStart}ms`
   );
 
-  report.notice(
-    `Email2Obsidian Sync summary: ${accepted} added, ${skipped} skipped, ${errors.length} errors, ${attachmentErrors.length} attachment issues.`
-  );
+  const summary = [
+    `${accepted} added`,
+    `${skipped} skipped`,
+    // Only worth a clause when it happened: an install with one Obsidian
+    // Vault never declines anything and should not be told so every run.
+    ...(declinedMarkers.length ? [`${declinedMarkers.length} not for this vault`] : []),
+    `${errors.length} errors`,
+    `${attachmentErrors.length} attachment issues`,
+  ].join(', ');
+  report.notice(`Email2Obsidian Sync summary: ${summary}.`);
 
-  return { synced: accepted, skipped, errors, attachmentErrors };
+  return result();
 }
 
 /**

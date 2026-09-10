@@ -1,6 +1,13 @@
 import { Plugin } from 'obsidian';
 import type { EmailSummary } from './api';
 import { prefixedWarn } from './sync-report';
+import {
+  isUnmarked,
+  tallyMarkers,
+  UNMARKED_KEY,
+  type MarkerCount,
+  type ReceivePolicy,
+} from './receive-policy';
 
 /* -------------------------------------------------------------------------
  * Fetch Ledger
@@ -29,13 +36,31 @@ import { prefixedWarn } from './sync-report';
  *     the handful of emails the run reached, discarding older accepted ids and
  *     tearing a hole in the middle of the run. Nothing is written at all.
  *
+ * A decline also records the Vault Marker the email arrived under, which is
+ * what lets a later marker change release exactly the declines it now claims
+ * (`release`) and answer, with no network request, how much mail that change
+ * would bring in (`pendingRelease`). Because the marker is on the entry, the
+ * ledger never has to remember which receive policy it was written under: the
+ * current policy read against the recorded marker answers the question
+ * directly, whichever device made the correction.
+ *
  * Storage: one top-level `fetch-log` key inside `plugin.saveData`'s envelope,
  * shared with `settings` — both readers spread what is already there and write
  * only their own key, so neither clobbers the other. Entries keep the shape
  * they have always had (`fetchedAt`, optional `filename`); a decline adds
- * `status: 'declined'`. An entry with no `status` — every entry any previous
- * version of the plugin ever wrote — is accepted.
+ * `status: 'declined'` and `vaultMarker`. An entry with no `status` — every
+ * entry any previous version of the plugin ever wrote — is accepted.
  * ---------------------------------------------------------------------- */
+
+/**
+ * How long the service keeps a received email before deleting it
+ * (`docs/server-api-contract.md`). Nothing older can be released, because
+ * nothing older is still there to fetch.
+ *
+ * It also bounds the cost of everything here: a scan that reads the stream
+ * out reads at most 72 hours of email, however far back the ledger goes.
+ */
+export const RETENTION_MS = 72 * 60 * 60 * 1000;
 
 /** The two disciplines a run commits under. */
 export type SyncMode = 'fetch-new' | 'fetch-all';
@@ -45,6 +70,19 @@ export interface LedgerEntry {
   filename?: string;
   /** Absent — the shape every pre-decline log has — means accepted. */
   status?: 'declined';
+  /**
+   * On a decline, the Vault Marker the email arrived under — `''` for an
+   * Unmarked Email, so "arrived unmarked" stays distinct from "not recorded".
+   * Absent on an accepted entry, and on a decline written before the marker
+   * was stored; such a decline cannot be ruled out and so is always released.
+   */
+  vaultMarker?: string;
+}
+
+/** What a proposed marker list would bring back in. */
+export interface PendingRelease {
+  total: number;
+  byMarker: MarkerCount[];
 }
 
 export type LedgerData = Record<string, LedgerEntry>;
@@ -68,13 +106,28 @@ export interface Ledger {
   shouldStopScan(page: EmailSummary[]): boolean;
   /** A note was written for this email. */
   accept(id: number, filename: string): void;
-  /** The receive policy turned this email down (ADR-0002). */
-  decline(id: number): void;
   /**
-   * Drop every declined id, here and on disk, so a changed receive policy
-   * reconsiders them on the next ordinary fetch-new (ADR-0002).
+   * The receive policy turned this email down (ADR-0002), under the Vault
+   * Marker it arrived with — `null` for an Unmarked Email.
    */
-  forgetDeclines(): void;
+  decline(id: number, vaultMarker: string | null): void;
+  /**
+   * Put back into play every decline this policy now claims and the service
+   * could still hold, so this run imports them. Returns how many.
+   *
+   * Released ids stop counting as seen, so the run selects them — but they
+   * stay in the ledger until it commits, and `shouldStopScan` keeps the scan
+   * running until each one has been met again. Without that the early stop
+   * would halt on newer email and never reach the very mail this run exists
+   * to recover.
+   */
+  release(policy: ReceivePolicy): number;
+  /**
+   * How much declined mail a policy would release, and under which markers —
+   * a read, changing nothing. This is what the settings panel asks while the
+   * user is still typing, so it never touches the network.
+   */
+  pendingRelease(policy: ReceivePolicy): PendingRelease;
   /** Persist the run. */
   commit(options: CommitOptions): Promise<void>;
 }
@@ -109,8 +162,10 @@ class FetchLedger implements Ledger {
   private stored: LedgerData;
   /** What this run has decided, in the order it decided it. */
   private pending = new Map<string, LedgerEntry>();
-  /** `forgetDeclines` makes a write worthwhile even with nothing accepted. */
-  private forgotten = false;
+  /** Declines this run put back into play, still on disk until it commits. */
+  private released = new Set<string>();
+  /** Of those, the ones the scan has yet to run back far enough to meet. */
+  private outstanding = new Set<string>();
 
   constructor(plugin: Plugin, stored: LedgerData, clock: () => string) {
     this.plugin = plugin;
@@ -120,29 +175,69 @@ class FetchLedger implements Ledger {
 
   hasSeen(id: number): boolean {
     const key = String(id);
-    return this.pending.has(key) || this.stored[key] !== undefined;
+    if (this.pending.has(key)) return true;
+    if (this.released.has(key)) return false;
+    return this.stored[key] !== undefined;
   }
 
   shouldStopScan(page: EmailSummary[]): boolean {
-    return page.some((email) => this.hasSeen(email.id));
+    for (const email of page) this.outstanding.delete(String(email.id));
+    // A released id is exactly the mail this run went looking for, and it sits
+    // further back than the newest email the scan opens on. Stopping at the
+    // usual place would walk straight past it.
+    if (this.outstanding.size) return false;
+    return page.some((email) => this.recorded(email.id));
   }
 
   accept(id: number, filename: string): void {
     this.pending.set(String(id), { fetchedAt: this.clock(), filename });
   }
 
-  decline(id: number): void {
-    this.pending.set(String(id), { fetchedAt: this.clock(), status: 'declined' });
+  decline(id: number, vaultMarker: string | null): void {
+    this.pending.set(String(id), {
+      fetchedAt: this.clock(),
+      status: 'declined',
+      vaultMarker: isUnmarked(vaultMarker) ? UNMARKED_KEY : vaultMarker,
+    });
   }
 
-  forgetDeclines(): void {
-    for (const [key, entry] of Array.from(this.pending)) {
-      if (entry.status === 'declined') this.pending.delete(key);
+  release(policy: ReceivePolicy): number {
+    for (const [key] of this.releasable(policy)) {
+      this.released.add(key);
+      this.outstanding.add(key);
     }
-    for (const [key, entry] of Object.entries(this.stored)) {
-      if (entry.status === 'declined') delete this.stored[key];
-    }
-    this.forgotten = true;
+    return this.released.size;
+  }
+
+  pendingRelease(policy: ReceivePolicy): PendingRelease {
+    const markers = this.releasable(policy).map(([, entry]) => entry.vaultMarker);
+    return { total: markers.length, byMarker: tallyMarkers(markers) };
+  }
+
+  /**
+   * The declined entries this policy claims and the service could still be
+   * holding, newest first. A decline with no recorded marker predates the
+   * marker being stored and cannot be ruled out, so it always counts.
+   *
+   * Newest first because a tally over these keeps the first spelling of a
+   * marker it meets, and the spelling the user should be shown is the one
+   * their most recent email actually carried.
+   */
+  private releasable(policy: ReceivePolicy): [string, LedgerEntry][] {
+    const cutoff = Date.parse(this.clock()) - RETENTION_MS;
+    return Object.entries(this.stored)
+      .filter(([, entry]) => {
+        if (entry.status !== 'declined') return false;
+        if (Date.parse(entry.fetchedAt) < cutoff) return false;
+        return entry.vaultMarker === undefined || policy.claims(entry.vaultMarker);
+      })
+      .sort(([a], [b]) => Number(b) - Number(a));
+  }
+
+  /** In the ledger at all — released or not. What contiguity is about. */
+  private recorded(id: number): boolean {
+    const key = String(id);
+    return this.pending.has(key) || this.stored[key] !== undefined;
   }
 
   async commit({ mode, cutShort }: CommitOptions): Promise<void> {
@@ -154,11 +249,26 @@ class FetchLedger implements Ledger {
       return;
     }
 
+    // A run that finished and still did not meet a released id has proved the
+    // service no longer holds it, and dropping the entry is what stops every
+    // later run from reading the stream out in search of it. A run that was
+    // cut short has proved nothing of the sort — it stopped, the service did
+    // not — so its released entries stay exactly where they are, and the next
+    // run releases and hunts them again.
+    const missedAreGone = !cutShort;
+
     // fetch-new appends. A cut-short run still writes: newest-first means the
     // accepted ids are a contiguous prefix, and logging them is what stops the
     // next run from fetching them again.
-    if (!this.pending.size && !this.forgotten) return;
-    await this.write({ ...this.stored, ...this.snapshot() });
+    if (!this.pending.size && !(missedAreGone && this.released.size)) return;
+
+    const base = { ...this.stored };
+    if (missedAreGone) {
+      for (const key of Array.from(this.released)) {
+        if (!this.pending.has(key)) delete base[key];
+      }
+    }
+    await this.write({ ...base, ...this.snapshot() });
   }
 
   private snapshot(): LedgerData {
@@ -178,7 +288,8 @@ class FetchLedger implements Ledger {
     await this.plugin.saveData(payload);
     this.stored = log;
     this.pending = new Map();
-    this.forgotten = false;
+    this.released = new Set();
+    this.outstanding = new Set();
   }
 }
 
@@ -209,7 +320,15 @@ async function loadLedger(
       // an older plugin version ever wrote — is an accepted entry.
       log[key] =
         entry.status === 'declined'
-          ? { fetchedAt: entry.fetchedAt, status: 'declined' }
+          ? {
+              fetchedAt: entry.fetchedAt,
+              status: 'declined',
+              // Left undefined when the stored decline predates the marker
+              // being recorded, which `releasable` reads as "cannot rule out".
+              ...(typeof entry.vaultMarker === 'string'
+                ? { vaultMarker: entry.vaultMarker }
+                : {}),
+            }
           : { fetchedAt: entry.fetchedAt, filename };
     }
     return log;

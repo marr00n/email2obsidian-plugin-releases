@@ -6,11 +6,21 @@ import {
   Plugin,
   PluginSettingTab,
   Setting,
+  ToggleComponent,
   normalizePath,
 } from 'obsidian';
 import { ApiError, createE2oClient, type E2oClient } from './api';
 import { runSync, SyncMode } from './pipeline';
+import { openLedger, type PendingRelease } from './fetch-ledger';
 import { isRootPath } from './path-utils';
+import {
+  describeDeclines,
+  filtersByMarker,
+  formatVaultMarkers,
+  parseVaultMarkers,
+  receivePolicyFor,
+  type MarkerCount,
+} from './receive-policy';
 import { createSyncReport, prefixedWarn, type SyncReport } from './sync-report';
 
 export type SyncInterval =
@@ -32,6 +42,18 @@ export interface Email2ObsidianSettings {
   runOnOpen: boolean;
   lastRunAt: string | null;
   debugLogging: boolean;
+  /**
+   * The Vault Markers this Obsidian Vault claims. Empty is the absence of a
+   * filter — every marker — which is what makes the shipped default identical
+   * to how the plugin behaved before it could tell vaults apart.
+   */
+  vaultMarkers: string[];
+  /** Whether this Obsidian Vault takes Unmarked Email. */
+  receiveUnmarked: boolean;
+  /** What the last fetch turned away, so settings can say so between runs. */
+  lastDeclined: MarkerCount[];
+  /** The last fetch saw the one signature of an account without vault routing. */
+  starterSignatureSeen: boolean;
 }
 
 const SYNC_INTERVALS: SyncInterval[] = [
@@ -54,6 +76,10 @@ const DEFAULT_SETTINGS: Email2ObsidianSettings = {
   runOnOpen: false,
   lastRunAt: null,
   debugLogging: false,
+  vaultMarkers: [],
+  receiveUnmarked: true,
+  lastDeclined: [],
+  starterSignatureSeen: false,
 };
 
 export default class Email2ObsidianPlugin extends Plugin {
@@ -145,7 +171,8 @@ export default class Email2ObsidianPlugin extends Plugin {
     });
   }
 
-  private async handleSync(mode: SyncMode) {
+  /** Public because the settings panel's Fetch now button starts one too. */
+  async handleSync(mode: SyncMode) {
     if (this.isSyncing) {
       this.report.debug('handleSync ignored: already syncing');
       this.report.notice('A sync is already in progress.');
@@ -165,6 +192,18 @@ export default class Email2ObsidianPlugin extends Plugin {
       });
 
       this.settings.lastRunAt = new Date().toISOString();
+      // What settings shows between runs, replaced rather than merged: both
+      // describe one fetch, so a run that declined nothing has to clear the
+      // previous run's readout rather than leave it standing.
+      //
+      // Except when the run found no new email at all. A background poll that
+      // met a quiet account has learned nothing, and wiping the readout on it
+      // would make `Last fetch declined: Art (4)` disappear from settings
+      // between the sync that discovered it and the user opening the tab.
+      if (result.synced + result.declined + result.errors.length > 0) {
+        this.settings.lastDeclined = result.declinedByMarker;
+        this.settings.starterSignatureSeen = result.starterSignature;
+      }
       await this.saveSettings();
 
       this.report.debug(
@@ -221,6 +260,25 @@ export default class Email2ObsidianPlugin extends Plugin {
 
 class Email2ObsidianSettingTab extends PluginSettingTab {
   plugin: Email2ObsidianPlugin;
+  /**
+   * The one row that changes while the user types. Held rather than
+   * re-rendered, because re-rendering the tab on every keystroke would take
+   * the cursor out of the field being typed into.
+   */
+  private releaseSetting: Setting | null = null;
+  private releaseButton: ButtonComponent | null = null;
+  /** Guards against an earlier keystroke's slower read landing last. */
+  private releaseToken = 0;
+  /** Held for the same reason: it turns live as the markers field fills in. */
+  private unmarkedSetting: Setting | null = null;
+  private unmarkedToggle: ToggleComponent | null = null;
+  /**
+   * Obsidian's `ToggleComponent.setValue` fires `onChange`, so redrawing the
+   * toggle would otherwise save the value it is only displaying — and
+   * overwrite the answer the user gave while their markers were still filled
+   * in. Set while this tab drives the control itself.
+   */
+  private redrawingUnmarked = false;
 
   constructor(app: App, plugin: Email2ObsidianPlugin) {
     super(app, plugin);
@@ -283,6 +341,8 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
           await this.plugin.updateSettings({ notesFolder: value });
         });
       });
+
+    this.displayVaultMarkers(containerEl);
 
     new Setting(containerEl)
       .setHeading()
@@ -388,6 +448,160 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
       });
   }
 
+  /**
+   * What this Obsidian Vault claims out of the shared stream (ADR 0001). Two
+   * controls, because the user has two separate questions: which marked email
+   * do I want, and do I want the unmarked kind at all.
+   *
+   * Every string here is placeholder copy and needs rewriting before release.
+   */
+  private displayVaultMarkers(containerEl: HTMLElement): void {
+    const settings = this.plugin.settings;
+
+    new Setting(containerEl)
+      .setHeading()
+      .setName('Vault markers')
+      .setDesc(
+        'Choose what this vault takes out of your Email2Obsidian account. ' +
+          'Vault routing is a Pro feature.'
+      );
+
+    const markersDesc = document.createDocumentFragment();
+    markersDesc.append(
+      'Separate markers with a semicolon. Leave blank to receive every marker.'
+    );
+    markersDesc.appendChild(document.createElement('br'));
+    markersDesc.append(
+      'Each vault is set up separately, and a vault left blank receives ' +
+        'everything — including mail marked for your other vaults.'
+    );
+    if (settings.lastDeclined.length) {
+      markersDesc.appendChild(document.createElement('br'));
+      // Diagnostic only: it reports what was turned away and never proposes a
+      // marker. A marker nobody has sent to recently is indistinguishable
+      // from one the user mistyped, so nothing here can be a suggestion.
+      // Not "last fetch": a quiet background poll deliberately leaves this
+      // standing rather than wiping a tally the user has not seen yet, so the
+      // wording must not claim the most recent run is what produced it.
+      markersDesc.append(`Recently declined: ${describeDeclines(settings.lastDeclined)}`);
+    }
+
+    new Setting(containerEl)
+      .setName('Markers')
+      .setDesc(markersDesc)
+      .addText((text) => {
+        text.setPlaceholder('Example: work; second brain');
+        text.setValue(formatVaultMarkers(settings.vaultMarkers));
+        text.onChange(async (value) => {
+          await this.plugin.updateSettings({ vaultMarkers: parseVaultMarkers(value) });
+          // Typing the first marker is what gives the unmarked question
+          // something to do; clearing the last one takes it away again.
+          this.refreshUnmarkedControl();
+          await this.refreshPendingRelease();
+        });
+      });
+
+    this.unmarkedSetting = new Setting(containerEl)
+      .setName('Unmarked emails')
+      .addToggle((toggle) => {
+        this.unmarkedToggle = toggle;
+        toggle.onChange(async (value) => {
+          if (this.redrawingUnmarked) return;
+          await this.plugin.updateSettings({ receiveUnmarked: value });
+          await this.refreshPendingRelease();
+        });
+      });
+    this.refreshUnmarkedControl();
+
+    this.releaseSetting = new Setting(containerEl)
+      .setName('Held-back email')
+      .setDesc('Nothing is waiting.')
+      .addButton((button) => {
+        this.releaseButton = button;
+        button.setButtonText('Fetch now');
+        button.setDisabled(true);
+        button.onClick(() => {
+          void this.plugin.handleSync('fetch-new').then(() => this.display());
+        });
+      });
+    void this.refreshPendingRelease();
+
+    if (settings.starterSignatureSeen) {
+      new Setting(containerEl)
+        .setName('Vault routing is not active on your account')
+        .setDesc(
+          'Email arrived with @@ still in the subject, which means the ' +
+            'service is not reading markers for your account. Notes still ' +
+            'import, with the @@ text left in the title, and the markers ' +
+            'above have nothing to match until vault routing is enabled.'
+        );
+    }
+  }
+
+  /**
+   * The unmarked question only exists once the markers field narrows anything.
+   * A blank field means this vault takes the whole stream, so the toggle reads
+   * on and goes dead rather than moving without effect — the dead-field defect
+   * that sank the wildcard design (ADR 0001).
+   *
+   * The stored answer is left alone, so filling the markers field back in
+   * restores the user's own choice rather than a default.
+   */
+  private refreshUnmarkedControl(): void {
+    const setting = this.unmarkedSetting;
+    const toggle = this.unmarkedToggle;
+    if (setting === null || toggle === null) return;
+
+    const filtering = filtersByMarker(this.plugin.settings.vaultMarkers);
+    setting.setDesc(
+      filtering
+        ? 'Take emails sent without a marker.'
+        : 'Unmarked emails always arrive while the markers field is blank, ' +
+            'because a blank field takes everything. List a marker above to ' +
+            'choose.'
+    );
+
+    this.redrawingUnmarked = true;
+    toggle.setValue(filtering ? this.plugin.settings.receiveUnmarked : true);
+    toggle.setDisabled(!filtering);
+    this.redrawingUnmarked = false;
+  }
+
+  /**
+   * Ask the Fetch Ledger what the markers now in the field would bring back
+   * in. A read of what is already on disk — the count has to be right while
+   * the user is offline or rate limited, so it never touches the network.
+   */
+  private async refreshPendingRelease(): Promise<void> {
+    const token = (this.releaseToken += 1);
+    const ledger = await openLedger(this.plugin, { warn: prefixedWarn });
+    const pending: PendingRelease = ledger.pendingRelease(
+      receivePolicyFor(this.plugin.settings)
+    );
+
+    // A slower read from an earlier keystroke must not overwrite a later one.
+    if (token !== this.releaseToken) return;
+    const setting = this.releaseSetting;
+    const button = this.releaseButton;
+    // Compared rather than tested for truthiness: Obsidian's Setting and
+    // ButtonComponent both carry a `then`, so a bare `!setting` reads as a
+    // misused promise.
+    if (setting === null || button === null) return;
+
+    if (!pending.total) {
+      setting.setDesc('Nothing is waiting.');
+      button.setDisabled(true);
+      return;
+    }
+
+    const emails = pending.total === 1 ? '1 email' : `${pending.total} emails`;
+    setting.setDesc(
+      `${emails} turned away by your previous markers will arrive on the next ` +
+        `fetch: ${describeDeclines(pending.byMarker)}.`
+    );
+    button.setDisabled(false);
+  }
+
   private async testConnection(button: ButtonComponent) {
     const btn = button;
     const apiKey = this.plugin.settings.apiKey.trim();
@@ -438,11 +652,33 @@ function normalizeSettings(raw: unknown): Email2ObsidianSettings {
     syncInterval,
     runOnOpen: Boolean(merged.runOnOpen),
     debugLogging: Boolean(merged.debugLogging),
+    // The settings field hands this over as the raw semicolon-separated
+    // string; a previous save hands over the parsed list. Both land here.
+    vaultMarkers: parseVaultMarkers(merged.vaultMarkers),
+    // Absent means yes — an install upgrading into this feature keeps taking
+    // the Unmarked Email it always took.
+    receiveUnmarked: merged.receiveUnmarked === undefined
+      ? DEFAULT_SETTINGS.receiveUnmarked
+      : Boolean(merged.receiveUnmarked),
+    lastDeclined: normalizeMarkerCounts(merged.lastDeclined),
+    starterSignatureSeen: Boolean(merged.starterSignatureSeen),
     lastRunAt:
       typeof merged.lastRunAt === 'string' && merged.lastRunAt.length > 0
         ? merged.lastRunAt
         : null,
   };
+}
+
+function normalizeMarkerCounts(input: unknown): MarkerCount[] {
+  if (!Array.isArray(input)) return [];
+  const counts: MarkerCount[] = [];
+  for (const entry of input) {
+    if (!isRecord(entry)) continue;
+    if (typeof entry.marker !== 'string') continue;
+    if (typeof entry.count !== 'number' || !Number.isFinite(entry.count)) continue;
+    counts.push({ marker: entry.marker, count: entry.count });
+  }
+  return counts;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -506,6 +742,7 @@ function syncIntervalToMs(interval: SyncInterval): number {
 
 // Exported for testing
 export {
+  normalizeMarkerCounts,
   normalizeSettings,
   normalizeFolder,
   normalizeSyncInterval,

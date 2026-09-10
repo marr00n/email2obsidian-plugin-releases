@@ -33,11 +33,21 @@ Opened over the destination folder, it scans that folder once, then sanitises,
 resolves collisions with `-1`, `-2`, … and reserves each note path it hands out.
 _Avoid_: filename helper, safeFilename, name lock, existing-names set
 
+**Receive Policy**:
+What one install claims out of the stream every install reads: the Vault
+Markers this Obsidian Vault accepts, and whether it accepts Unmarked Email.
+An empty marker list is the absence of a filter — every marker, Unmarked Email
+included — never an empty allow list that claims nothing. The unmarked answer
+only applies once the marker list narrows something, which is why settings
+disables that toggle while the list is blank.
+_Avoid_: filter, allow list, whitelist, routing rules, vault config
+
 **Fetch Ledger**:
 The plugin's record of which emails this install has already dealt with —
-accepted or declined. It is a contiguous run of the newest emails, which is why
-the newest-first scan may stop at the first entry it recognises: everything
-older is already in the ledger.
+accepted or declined, a decline carrying the Vault Marker it arrived under. It
+is a contiguous run of the newest emails, which is why the newest-first scan
+may stop at the first entry it recognises: everything older is already in the
+ledger.
 _Avoid_: fetch log, seen set, logged ids, history, dedupe cache
 
 ## Relationships
