@@ -8,10 +8,10 @@ stream of summaries and decides locally.
 
 ## Consequences
 
-The receive policy's third option ("marked for X, and unmarked") cannot be
+A vault that takes both its listed markers and unmarked email cannot be
 expressed as a single `?vault=` request anyway: the filter excludes nulls and
-there is no `?vault=none`. Filtering locally serves all three policies with one
-code path.
+there is no `?vault=none`. Neither can a vault listing several markers.
+Filtering locally serves every combination with one code path.
 
 The extra bandwidth is small and bounded. Summaries carry no body and no
 attachments; the expensive `getEmail` call happens per selected email, so
@@ -23,11 +23,13 @@ early-stop in `paginateEmails` — it halts at the first already-logged id, on
 the assumption that the log is a contiguous run of the newest emails. Logging
 declines keeps that assumption true.
 
-When a user changes their receive policy, drop the declined entries from the
+When a user changes their markers, drop the matching declined entries from the
 log. Previously-declined email then gets reconsidered by the next ordinary
-`fetch-new`, with no full re-fetch. This matters because "Fetch all notes" is
-not a safe reconciliation path: `safeFilename` suffixes against names already
-in the folder, so re-fetching an email whose note exists writes
+`fetch-new`, with no full re-fetch. A declined entry stores its marker and its
+timestamp, which also lets the settings tab state how much mail an edit is
+about to release without asking the server. This matters because "Fetch all
+notes" is not a safe reconciliation path: `safeFilename` suffixes against names
+already in the folder, so re-fetching an email whose note exists writes
 `Meeting notes-1.md` beside `Meeting notes.md` rather than recognising it.
 
 Notes already downloaded under a previous policy stay where they are. The
@@ -35,5 +37,7 @@ plugin never moves or deletes a note in response to a policy change: those
 files are the user's by then, and notes written before this feature carry no
 marker in their frontmatter, so identifying them would cost a `getEmail` call
 per note. Notes written from now on do carry one — `email2obsidianVault`,
-alongside the existing `email2obsidianID` — so a future cleanup or re-route
-feature can work locally for everything except that pre-existing tail.
+alongside the existing `email2obsidianID`, written on every note and left empty
+for unmarked email — so a future cleanup or re-route feature can work locally
+for everything except that pre-existing tail. With a 72-hour retention window,
+anything not stamped at write time is unrecoverable after three days.
