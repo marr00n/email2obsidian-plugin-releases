@@ -342,8 +342,6 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
         });
       });
 
-    this.displayVaultMarkers(containerEl);
-
     new Setting(containerEl)
       .setHeading()
       .setName('Fetch Notes Automatically');
@@ -405,6 +403,8 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
       )
       .setDisabled(true);
 
+    this.displayVaultMarkers(containerEl);
+
     new Setting(containerEl)
       .setHeading()
       .setName('Tips');
@@ -453,27 +453,21 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
    * controls, because the user has two separate questions: which marked email
    * do I want, and do I want the unmarked kind at all.
    *
-   * Every string here is placeholder copy and needs rewriting before release.
+   * The heading and the Markers description carry the owner's copy; the rest
+   * is still placeholder and needs rewriting before release.
    */
   private displayVaultMarkers(containerEl: HTMLElement): void {
     const settings = this.plugin.settings;
 
     new Setting(containerEl)
       .setHeading()
-      .setName('Vault markers')
-      .setDesc(
-        'Choose what this vault takes out of your Email2Obsidian account. ' +
-          'Vault routing is a Pro feature.'
-      );
+      .setName('Vault Routing (Pro Only)')
+      .setDesc('Choose what this vault takes out of your Email2Obsidian account.');
 
     const markersDesc = document.createDocumentFragment();
     markersDesc.append(
-      'Separate markers with a semicolon. Leave blank to receive every marker.'
-    );
-    markersDesc.appendChild(document.createElement('br'));
-    markersDesc.append(
-      'Each vault is set up separately, and a vault left blank receives ' +
-        'everything — including mail marked for your other vaults.'
+      'Specify a marker to have only those emails fetched into this vault. ' +
+        'Leave blank to receive all marked emails.'
     );
     if (settings.lastDeclined.length) {
       markersDesc.appendChild(document.createElement('br'));

@@ -178,9 +178,11 @@ accounts for 5 of the 11 existing lint errors.
 
 Settled while implementing:
 
-- **Where the section sits**: its own "Vault markers" heading between Set up
-  and Fetch Notes Automatically. It governs what arrives, so it reads before
-  the schedule that fetches it.
+- **Where the section sits**: its own "Vault Routing (Pro Only)" heading
+  between Fetch Notes Automatically and Tips. It was first placed above the
+  schedule, on the reasoning that what arrives reads before the schedule that
+  fetches it; the owner moved it below, keeping Set up and the schedule — the
+  settings every install touches — unbroken at the top.
 - **What Fetch now runs**: an ordinary `fetch-new`. The release machinery is
   in the sync already, so a targeted pull would be a second path to the same
   place and a second path that can be wrong.
