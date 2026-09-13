@@ -1,11 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import Email2ObsidianPlugin, {
+  DebouncedSave,
+  TEXT_SAVE_DELAY_MS,
   normalizeSettings,
   normalizeFolder,
   normalizeSyncInterval,
   syncIntervalToMs,
 } from '../src/main';
+import { openLedger } from '../src/fetch-ledger';
 import { App, Plugin, Vault } from 'obsidian';
 import { describeDeclines, formatVaultMarkers } from '../src/receive-policy';
 
@@ -187,5 +190,126 @@ describe('plugin scheduler and sync guard', () => {
 
     plugin['setupScheduler']();
     expect((window.clearInterval as any)).toHaveBeenCalled();
+  });
+});
+
+/**
+ * Give the plugin a data file that yields between reading and writing, the
+ * way a real `data.json` on disk does. Without the gap, two read-modify-writes
+ * started together happen to run one at a time and the collision never shows.
+ */
+function installSlowData(plugin: Plugin): void {
+  let data: Record<string, unknown> = {};
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+  plugin.loadData = async () => {
+    await tick();
+    return data;
+  };
+  plugin.saveData = async (value: unknown) => {
+    await tick();
+    data = value as Record<string, unknown>;
+  };
+}
+
+describe('settings and the fetch ledger share data.json', () => {
+  it('a settings save landing mid-fetch cannot carry away the ledger', async () => {
+    const plugin = makePlugin();
+    installSlowData(plugin);
+    await plugin.loadSettings();
+
+    const ledger = await openLedger(plugin, {
+      clock: () => '2021-01-01T00:00:00.000Z',
+    });
+    ledger.accept(1, 'One.md');
+
+    // The user changes a setting while the fetch is committing. Read-modify-
+    // write is not atomic, so before both went through one queue whichever
+    // saved second wrote an envelope that predated the other's change — and
+    // losing the ledger means those emails import again as `-1` duplicates.
+    plugin.settings.notesFolder = 'Inbox';
+    await Promise.all([
+      ledger.commit({ mode: 'fetch-new', cutShort: false }),
+      plugin.saveSettings(),
+    ]);
+
+    const envelope = (await plugin.loadData()) as {
+      settings: { notesFolder: string };
+      'fetch-log': Record<string, unknown>;
+    };
+    expect(envelope['fetch-log']).toHaveProperty('1');
+    expect(envelope.settings.notesFolder).toBe('Inbox');
+  });
+
+  it('holds the ledger too when the settings save goes first', async () => {
+    const plugin = makePlugin();
+    installSlowData(plugin);
+    await plugin.loadSettings();
+
+    const ledger = await openLedger(plugin, {
+      clock: () => '2021-01-01T00:00:00.000Z',
+    });
+    ledger.accept(2, 'Two.md');
+
+    plugin.settings.apiKey = 'key';
+    await Promise.all([
+      plugin.saveSettings(),
+      ledger.commit({ mode: 'fetch-new', cutShort: false }),
+    ]);
+
+    const envelope = (await plugin.loadData()) as {
+      settings: { apiKey: string };
+      'fetch-log': Record<string, unknown>;
+    };
+    expect(envelope['fetch-log']).toHaveProperty('2');
+    expect(envelope.settings.apiKey).toBe('key');
+  });
+});
+
+describe('debounced text field saves', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    (global as any).window = {
+      setTimeout: (fn: () => void, ms: number) => globalThis.setTimeout(fn, ms),
+      clearTimeout: (id: any) => globalThis.clearTimeout(id),
+    };
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    delete (global as any).window;
+  });
+
+  it('saves once when the typing stops, not once per keystroke', async () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    const saver = new DebouncedSave(TEXT_SAVE_DELAY_MS, save);
+
+    // Three keystrokes: before this, three full writes of data.json and three
+    // restarts of the background fetch timer.
+    for (const value of ['a', 'ab', 'abc']) saver.schedule(value);
+    expect(save).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(TEXT_SAVE_DELAY_MS);
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith('abc');
+  });
+
+  it('flush saves what is waiting at once, and the timer then has nothing left', async () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    const saver = new DebouncedSave(TEXT_SAVE_DELAY_MS, save);
+
+    saver.schedule('abc');
+    await saver.flush();
+    expect(save).toHaveBeenCalledWith('abc');
+
+    await vi.advanceTimersByTimeAsync(TEXT_SAVE_DELAY_MS);
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  it('flush with nothing waiting saves nothing', async () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+
+    await new DebouncedSave(TEXT_SAVE_DELAY_MS, save).flush();
+
+    expect(save).not.toHaveBeenCalled();
   });
 });

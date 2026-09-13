@@ -1,5 +1,6 @@
 import { Plugin } from 'obsidian';
 import type { EmailSummary } from './api';
+import { pluginDataStore } from './plugin-data';
 import { prefixedWarn } from './sync-report';
 import {
   isUnmarked,
@@ -45,11 +46,15 @@ import {
  * directly, whichever device made the correction.
  *
  * Storage: one top-level `fetch-log` key inside `plugin.saveData`'s envelope,
- * shared with `settings` — both readers spread what is already there and write
- * only their own key, so neither clobbers the other. Entries keep the shape
- * they have always had (`fetchedAt`, optional `filename`); a decline adds
- * `status: 'declined'` and `vaultMarker`. An entry with no `status` — every
- * entry any previous version of the plugin ever wrote — is accepted.
+ * shared with `settings`. Both owners spread what is already there and write
+ * only their own key, but spreading alone does not keep them apart: a
+ * read-modify-write is not atomic, so a settings save that reads the envelope
+ * before this one writes it carries the old log back over the new. Both
+ * owners therefore go through `pluginDataStore`, which runs their writes one
+ * after another. Entries keep the shape they have always had (`fetchedAt`,
+ * optional `filename`); a decline adds `status: 'declined'` and
+ * `vaultMarker`. An entry with no `status` — every entry any previous version
+ * of the plugin ever wrote — is accepted.
  * ---------------------------------------------------------------------- */
 
 /**
@@ -280,12 +285,13 @@ class FetchLedger implements Ledger {
   }
 
   private async write(log: LedgerData): Promise<void> {
-    const existing: unknown = await this.plugin.loadData();
-    const payload = {
-      ...(existing && typeof existing === 'object' ? existing : {}),
+    // Through the store, so the envelope this merges into is the one on disk
+    // at the moment of the save — a settings save that lands mid-flight can
+    // no longer carry away the log written here.
+    await pluginDataStore(this.plugin).update((envelope) => ({
+      ...envelope,
       [FETCH_LOG_KEY]: log,
-    };
-    await this.plugin.saveData(payload);
+    }));
     this.stored = log;
     this.pending = new Map();
     this.released = new Set();
@@ -298,11 +304,7 @@ async function loadLedger(
   warn: (msg: string, ...details: unknown[]) => void
 ): Promise<LedgerData> {
   try {
-    const raw: unknown = await plugin.loadData();
-    if (!raw || typeof raw !== 'object') {
-      return {};
-    }
-    const envelope = raw as Record<string, unknown>;
+    const envelope = await pluginDataStore(plugin).read();
     const stored = envelope[FETCH_LOG_KEY];
     if (!stored || typeof stored !== 'object') {
       return {};

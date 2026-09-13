@@ -142,7 +142,7 @@ export interface E2oClientOptions {
 
 export function createE2oClient({
   apiKey,
-  http = requestUrl,
+  http = obsidianHttp,
   warn = defaultWarn,
 }: E2oClientOptions): E2oClient {
   async function listEmails(
@@ -221,6 +221,20 @@ export function createE2oClient({
  * `[Email2Obsidian] ` prefix, from the one module that owns that literal.
  */
 const defaultWarn = prefixedWarn;
+
+/**
+ * The default transport.
+ *
+ * Obsidian's `requestUrl` rejects on any status of 400 or above unless it is
+ * told not to, so without `throw: false` a 401, a 429 or a 5xx never reaches
+ * `safeFetch`'s status check: it arrives as a thrown `Error` and is filed as
+ * `network`, with no status attached. Everything downstream that reads the
+ * status — the friendly per-status messages here, and the rate-limit
+ * discipline that stops a run and holds the ledger back — is then dead code.
+ * Opting out is what turns an error response back into a response.
+ */
+const obsidianHttp: HttpAdapter = (request) =>
+  requestUrl({ ...request, throw: false });
 
 async function safeFetch(
   http: HttpAdapter,

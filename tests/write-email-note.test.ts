@@ -148,7 +148,7 @@ describe('writeEmailNote', () => {
         '---',
         'title: "Hello"',
         'created: 2026-01-01T00:00:00',
-        'tags: [email2obsidian]',
+        'tags: ["email2obsidian"]',
         'email2obsidianID: 1',
         'email2obsidianVault: ""',
         '---',

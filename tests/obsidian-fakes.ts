@@ -115,6 +115,8 @@ export interface RequestUrlParam {
   url: string;
   method?: string;
   headers?: Record<string, string>;
+  /** Real Obsidian rejects on status >= 400 unless this is false. */
+  throw?: boolean;
 }
 
 export interface RequestUrlResponse {
@@ -144,7 +146,9 @@ export class Notice {
 
 export class Setting {}
 export class SuggestModal<T> {}
-export class PluginSettingTab {}
+export class PluginSettingTab {
+  hide(): void {}
+}
 export class ButtonComponent {}
 export class ToggleComponent {}
 

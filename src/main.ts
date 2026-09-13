@@ -13,6 +13,7 @@ import { ApiError, createE2oClient, type E2oClient } from './api';
 import { runSync, SyncMode } from './pipeline';
 import { openLedger, type PendingRelease } from './fetch-ledger';
 import { isRootPath } from './path-utils';
+import { pluginDataStore } from './plugin-data';
 import {
   describeDeclines,
   filtersByMarker,
@@ -121,20 +122,26 @@ export default class Email2ObsidianPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    const raw: unknown = await this.loadData();
-    const envelope = isRecord(raw) ? raw : {};
+    const envelope = await pluginDataStore(this).read();
     const stored =
       Object.prototype.hasOwnProperty.call(envelope, 'settings')
         ? envelope.settings
-        : raw;
+        : envelope;
     this.settings = normalizeSettings(stored);
   }
 
+  /**
+   * Through the store, because `settings` shares `data.json` with the Fetch
+   * Ledger's `fetch-log`. Reading the envelope here and saving it back is only
+   * safe while no other owner writes in between, and a fetch running in the
+   * background is exactly that other owner — one it would cost the user their
+   * import history to lose to.
+   */
   async saveSettings(): Promise<void> {
-    const raw: unknown = await this.loadData();
-    const envelope = isRecord(raw) ? { ...raw } : {};
-    envelope.settings = this.settings;
-    await this.saveData(envelope);
+    await pluginDataStore(this).update((envelope) => ({
+      ...envelope,
+      settings: this.settings,
+    }));
   }
 
   async updateSettings(partial: Partial<Email2ObsidianSettings>): Promise<void> {
@@ -258,6 +265,57 @@ export default class Email2ObsidianPlugin extends Plugin {
   }
 }
 
+/**
+ * How long a text field waits after the last keystroke before it saves.
+ *
+ * Every `onChange` used to be a full settings save: forty writes to
+ * `data.json` for a forty-character API key, each one another chance to
+ * collide with a running fetch, and each one restarting the background fetch
+ * timer. Long enough that ordinary typing saves once; short enough that a user
+ * who types and immediately clicks elsewhere in Obsidian has already saved.
+ */
+const TEXT_SAVE_DELAY_MS = 700;
+
+/**
+ * A text field's save, held until the typing stops. `flush` is what makes the
+ * wait safe: leaving the field, or closing the settings tab, commits the
+ * pending value immediately rather than racing the timer.
+ */
+class DebouncedSave {
+  private handle: number | null = null;
+  /** The value waiting to be saved; `null` when nothing is waiting. */
+  private pending: string | null = null;
+
+  constructor(
+    private readonly delayMs: number,
+    private readonly save: (value: string) => Promise<void>
+  ) {}
+
+  schedule(value: string): void {
+    this.pending = value;
+    this.cancelTimer();
+    this.handle = window.setTimeout(() => {
+      void this.flush();
+    }, this.delayMs);
+  }
+
+  async flush(): Promise<void> {
+    this.cancelTimer();
+    if (this.pending === null) return;
+    const value = this.pending;
+    // Cleared before the await, so a keystroke arriving mid-save schedules a
+    // fresh one rather than being swallowed as already handled.
+    this.pending = null;
+    await this.save(value);
+  }
+
+  private cancelTimer(): void {
+    if (this.handle === null) return;
+    window.clearTimeout(this.handle);
+    this.handle = null;
+  }
+}
+
 /** Held-back row when the current markers would release nothing. */
 const NOTHING_WAITING =
   'Emails this vault rejected stay on the server for 72 hours. ' +
@@ -284,6 +342,8 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
    * in. Set while this tab drives the control itself.
    */
   private redrawingUnmarked = false;
+  /** Every debounced text field on the tab, so they can all be flushed. */
+  private textSaves: DebouncedSave[] = [];
 
   constructor(app: App, plugin: Email2ObsidianPlugin) {
     super(app, plugin);
@@ -293,6 +353,9 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
+    // The fields about to be replaced may still be holding a keystroke, and
+    // the new ones read from settings — so commit before rebuilding.
+    this.flushTextSaves();
 
     // A Setting rather than a bare div so the intro shares the padding and
     // left edge of every row beneath it.
@@ -317,9 +380,9 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
         text.inputEl.type = 'password';
         text.setPlaceholder('Example: 12345678-1234-1234-1234-123456789abc');
         text.setValue(this.plugin.settings.apiKey);
-        text.onChange(async (value) => {
-          await this.plugin.updateSettings({ apiKey: value });
-        });
+        this.debounceText(text.inputEl, (value) =>
+          this.plugin.updateSettings({ apiKey: value })
+        );
       })
       .addButton((button) => {
         button.setButtonText('Test connection');
@@ -344,9 +407,9 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
       .addText((text) => {
         text.setPlaceholder('(blank for root)');
         text.setValue(this.plugin.settings.notesFolder);
-        text.onChange(async (value) => {
-          await this.plugin.updateSettings({ notesFolder: value });
-        });
+        this.debounceText(text.inputEl, (value) =>
+          this.plugin.updateSettings({ notesFolder: value })
+        );
       });
 
     new Setting(containerEl)
@@ -539,7 +602,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
       .addText((text) => {
         text.setPlaceholder('E.g. work; second brain');
         text.setValue(formatVaultMarkers(settings.vaultMarkers));
-        text.onChange(async (value) => {
+        this.debounceText(text.inputEl, async (value) => {
           await this.plugin.updateSettings({ vaultMarkers: parseVaultMarkers(value) });
           // Typing the first marker is what gives the unmarked question
           // something to do; clearing the last one takes it away again.
@@ -583,6 +646,41 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
             'above have nothing to match until vault routing is enabled.'
         );
     }
+  }
+
+  /**
+   * Wire a text field to save on a pause in typing rather than on every
+   * keystroke, and immediately when the field loses focus.
+   */
+  private debounceText(
+    inputEl: HTMLInputElement,
+    save: (value: string) => Promise<void>
+  ): void {
+    const saver = new DebouncedSave(TEXT_SAVE_DELAY_MS, save);
+    this.textSaves.push(saver);
+    inputEl.addEventListener('input', () => {
+      saver.schedule(inputEl.value);
+    });
+    inputEl.addEventListener('blur', () => {
+      void saver.flush();
+    });
+  }
+
+  /**
+   * Obsidian calls this when the settings modal closes or the user switches
+   * tabs — the one moment a half-typed field would otherwise be lost, because
+   * closing the modal need not blur the field first.
+   */
+  hide(): void {
+    this.flushTextSaves();
+    super.hide();
+  }
+
+  /** Commit whatever the text fields are still holding, and let them go. */
+  private flushTextSaves(): void {
+    const saves = this.textSaves;
+    this.textSaves = [];
+    for (const saver of saves) void saver.flush();
   }
 
   /**
@@ -800,6 +898,8 @@ function syncIntervalToMs(interval: SyncInterval): number {
 
 // Exported for testing
 export {
+  DebouncedSave,
+  TEXT_SAVE_DELAY_MS,
   normalizeMarkerCounts,
   normalizeSettings,
   normalizeFolder,

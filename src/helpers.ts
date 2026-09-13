@@ -134,15 +134,17 @@ export async function renderEmailMarkdown(
   const tags = Array.from(new Set([...email.hashtags, 'email2obsidian']));
   const frontmatter = [
     '---',
-    `title: "${escapeFrontmatter(email.subject)}"`,
+    `title: ${yamlString(email.subject)}`,
     `created: ${email.createdAt}`,
-    `tags: [${tags.join(', ')}]`,
+    // Each tag quoted: bare, a tag holding a comma became two tags and one
+    // holding brackets became a nested list.
+    `tags: [${tags.map(yamlString).join(', ')}]`,
     `email2obsidianID: ${email.id}`,
     // ADR-0003: every note carries the Vault Marker it arrived under, so a
     // later cleanup or re-route can work locally. Written on every note and
     // left empty for an Unmarked Email rather than omitted, so a query over
     // the property needs no null branch.
-    `email2obsidianVault: "${escapeFrontmatter(email.vaultMarker ?? '')}"`,
+    `email2obsidianVault: ${yamlString(email.vaultMarker ?? '')}`,
     '---',
   ].join('\n');
 
@@ -179,8 +181,34 @@ export async function renderEmailMarkdown(
   };
 }
 
-function escapeFrontmatter(input: string): string {
-  return input.replace(/"/g, '\\"');
+/**
+ * A YAML double-quoted scalar, quotes included.
+ *
+ * Inside double quotes a backslash starts an escape sequence, so escaping
+ * only the quote character left every other backslash to be read as one: a
+ * subject naming a Windows path (`C:\Users\Name\report.docx`) produced
+ * frontmatter that Obsidian could not parse at all, and the note arrived with
+ * an empty or broken properties panel. A newline was the quieter version of
+ * the same fault — legal YAML, but the subject came back folded onto one line.
+ *
+ * Double-quoted rather than single: it is the one YAML style that can carry
+ * a line break, and the escapes below are only available here.
+ */
+function yamlString(input: string): string {
+  const escaped = input
+    // Backslash first, or it would escape the backslashes added below.
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t')
+    // Whatever else the wire carried: a raw control character is not legal
+    // in a double-quoted scalar, so it goes in as its escape.
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f]/g, (char) =>
+      `\\x${char.charCodeAt(0).toString(16).padStart(2, '0')}`
+    );
+  return `"${escaped}"`;
 }
 
 function buildAttachmentSection(

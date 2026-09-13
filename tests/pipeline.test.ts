@@ -256,7 +256,7 @@ describe('pipeline runSync', () => {
     expect(result.synced).toBe(1);
 
     const text = noteText(vault, 'Notes/No tags.md');
-    expect(text).toContain('tags: [email2obsidian]');
+    expect(text).toContain('tags: ["email2obsidian"]');
   });
 
   it('never fetches page 2 when page 1 already holds a logged id', async () => {
