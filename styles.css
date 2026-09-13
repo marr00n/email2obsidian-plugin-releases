@@ -2,3 +2,13 @@
   color: var(--interactive-accent);
   font-weight: 400;
 }
+
+/* Intro line above the Set up heading: no divider, and the description keeps
+   full width because the row has no name or control. */
+.e2o-intro {
+  border-top: none;
+  padding-top: 0;
+}
+.e2o-intro .setting-item-info {
+  flex: 1 1 auto;
+}

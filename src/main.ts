@@ -258,6 +258,11 @@ export default class Email2ObsidianPlugin extends Plugin {
   }
 }
 
+/** Held-back row when the current markers would release nothing. */
+const NOTHING_WAITING =
+  'Emails this vault rejected stay on the server for 72 hours. ' +
+  'If you change the markers above, any that now match will show here.';
+
 class Email2ObsidianSettingTab extends PluginSettingTab {
   plugin: Email2ObsidianPlugin;
   /**
@@ -289,13 +294,15 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    const helperTip = containerEl.createEl('div');
-    helperTip.addClass('setting-item-description');
-    helperTip.appendText('This plugin works in tandem with the third party service Email2Obsidian.com. ');
-    helperTip.createEl('a', {
-      href: 'https://email2obsidian.com',
-      text: 'Get started for free.',
-    });
+    // A Setting rather than a bare div so the intro shares the padding and
+    // left edge of every row beneath it.
+    const helperTip = document.createDocumentFragment();
+    helperTip.append('Official plugin for Email2Obsidian.com service. ');
+    const startLink = document.createElement('a');
+    startLink.href = 'https://email2obsidian.com';
+    startLink.textContent = 'Get started for free.';
+    helperTip.appendChild(startLink);
+    new Setting(containerEl).setDesc(helperTip).settingEl.addClass('e2o-intro');
 
     new Setting(containerEl)
       .setHeading()
@@ -328,7 +335,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
     );
     notesFolderDesc.appendChild(document.createElement('br'));
     notesFolderDesc.append(
-      "Email attachments follow global settings. These can be adjusted from Obsidian's Files and Links settings."
+      "Leave blank for vault root. Email attachments follow Obsidian default settings."
     );
 
     new Setting(containerEl)
@@ -349,7 +356,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName('Background fetch')
       .setDesc(
-        'Enable background fetching at your chosen interval. When enabled, a sync runs immediately once.'
+        'Enable background fetching at your chosen interval. When enabled, a fetch runs immediately once.'
       )
       .addToggle((toggle) => {
         toggle.setValue(this.plugin.settings.periodicSync);
@@ -372,7 +379,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Fetch interval')
-      .setDesc('How frequently would you like to check for new notes? (Only if Background Sync is enabled.)')
+      .setDesc('How frequently would you like to check for new notes? (Only if Background Fetch is enabled.)')
       .addDropdown((dropdown) => {
         dropdown
           .addOptions({
@@ -451,7 +458,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
     tipsLink.href = 'https://email2obsidian.com/dashboard';
     tipsLink.textContent = 'Click here';
     tipsLine3.appendChild(tipsLink);
-    tipsLine3.append(' to open your account settings.');
+    tipsLine3.append(' to open your E2O account settings.');
     tipsDesc.appendChild(tipsLine3);
 
     new Setting(containerEl).setDesc(tipsDesc);
@@ -485,15 +492,35 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
   private displayVaultMarkers(containerEl: HTMLElement): void {
     const settings = this.plugin.settings;
 
+    /** The literal syntax the copy is telling the user to type. */
+    const code = (text: string): HTMLElement => {
+      const el = document.createElement('code');
+      el.textContent = text;
+      return el;
+    };
+
+    const headingDesc = document.createDocumentFragment();
+    headingDesc.append(
+      'One account can feed several vaults. Put ',
+      code('@@VaultName'),
+      ' or ',
+      code('@@"Vault Name"'),
+      " in an email's subject to mark it, then tell this vault which markers to fetch."
+    );
+
     new Setting(containerEl)
       .setHeading()
       .setName('Vault Routing (Pro Only)')
-      .setDesc('Choose what this vault takes out of your Email2Obsidian account.');
+      .setDesc(headingDesc);
 
     const markersDesc = document.createDocumentFragment();
     markersDesc.append(
-      'Specify a marker to have only those emails fetched into this vault. ' +
-        'Leave blank to receive all marked emails.'
+      'List the markers this vault should fetch, separated by semicolons. ',
+      'Enter ',
+      code('work'),
+      ' and only emails marked ',
+      code('@@work'),
+      ' land here. Leave blank and this vault fetches every email, marked or not.'
     );
     if (settings.lastDeclined.length) {
       markersDesc.appendChild(document.createElement('br'));
@@ -510,7 +537,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
       .setName('Markers')
       .setDesc(markersDesc)
       .addText((text) => {
-        text.setPlaceholder('Example: work; second brain');
+        text.setPlaceholder('E.g. work; second brain');
         text.setValue(formatVaultMarkers(settings.vaultMarkers));
         text.onChange(async (value) => {
           await this.plugin.updateSettings({ vaultMarkers: parseVaultMarkers(value) });
@@ -535,7 +562,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
 
     this.releaseSetting = new Setting(containerEl)
       .setName('Held-back email')
-      .setDesc('Nothing is waiting.')
+      .setDesc(NOTHING_WAITING)
       .addButton((button) => {
         this.releaseButton = button;
         button.setButtonText('Fetch now');
@@ -573,13 +600,24 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
     if (setting === null || toggle === null) return;
 
     const filtering = filtersByMarker(this.plugin.settings.vaultMarkers);
-    setting.setDesc(
-      filtering
-        ? 'Take emails sent without a marker.'
-        : 'Unmarked emails always arrive while the markers field is blank, ' +
-            'because a blank field takes everything. List a marker above to ' +
-            'choose.'
-    );
+    const desc = document.createDocumentFragment();
+    const code = document.createElement('code');
+    code.textContent = '@@';
+    if (filtering) {
+      desc.append(
+        'Also fetch emails that have no ',
+        code,
+        ' marker. Turn off to keep this vault to its markers only.'
+      );
+    } else {
+      desc.append(
+        'Emails with no ',
+        code,
+        ' marker. While the markers field is blank this vault fetches ' +
+          'everything, so these always arrive. Add a marker above to decide.'
+      );
+    }
+    setting.setDesc(desc);
 
     this.redrawingUnmarked = true;
     toggle.setValue(filtering ? this.plugin.settings.receiveUnmarked : true);
@@ -609,7 +647,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
     if (setting === null || button === null) return;
 
     if (!pending.total) {
-      setting.setDesc('Nothing is waiting.');
+      setting.setDesc(NOTHING_WAITING);
       button.setDisabled(true);
       return;
     }
