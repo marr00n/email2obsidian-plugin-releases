@@ -34,6 +34,16 @@ export default defineConfig([
       "obsidianmd/sample-names": "off",
       // example: add a rule not in the recommended set and set its severity
       "obsidianmd/prefer-file-manager-trash-file": "error",
+      // Sentence case, but the rule cannot know this plugin's own nouns: the
+      // product name, the service it talks to, the plan tier the copy names,
+      // and the acronyms the settings copy uses.
+      "obsidianmd/ui/sentence-case": [
+        "error",
+        {
+          brands: ["Email2Obsidian", "Email2Obsidian.com", "Obsidian", "Pro"],
+          acronyms: ["API", "URL", "PDF"],
+        },
+      ],
     },
   },
   {

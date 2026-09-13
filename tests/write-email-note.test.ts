@@ -4,7 +4,7 @@ import { App, Plugin, TFile, Vault } from 'obsidian';
 import { writeEmailNote, type WriteEmailNoteContext } from '../src/write-email-note';
 import { openNoteNames } from '../src/note-namer';
 import { silentSyncReport } from '../src/sync-report';
-import type { AttachmentMeta, EmailDetail } from '../src/api';
+import { ApiError, type AttachmentMeta, type EmailDetail } from '../src/api';
 
 const NOTE_FOLDER = 'Notes';
 
@@ -148,7 +148,7 @@ describe('writeEmailNote', () => {
         '---',
         'title: "Hello"',
         'created: 2026-01-01T00:00:00',
-        'tags: [email2obsidian]',
+        'tags: ["email2obsidian"]',
         'email2obsidianID: 1',
         'email2obsidianVault: ""',
         '---',
@@ -210,5 +210,122 @@ describe('writeEmailNote', () => {
     // ...and the non-inline one is listed, not embedded.
     expect(text).toContain('- [doc.txt](Notes/doc.txt)');
     expect(text).not.toContain('![[Notes/doc.txt]]');
+  });
+});
+
+describe('writeEmailNote and files it did not write', () => {
+  /**
+   * The Note Namer scans the folder once, when it is opened. Creating a file
+   * after that is the gap this guards: Obsidian Sync landing a note from
+   * another device, another plugin, the user typing.
+   */
+  async function contextWithLateFile(
+    path: string,
+    contents: string
+  ): Promise<{ ctx: WriteEmailNoteContext; vault: Vault }> {
+    const made = await makeContext();
+    await made.vault.create(path, contents);
+    return made;
+  }
+
+  it('takes the next name rather than replacing a note it did not write', async () => {
+    const { ctx, vault } = await contextWithLateFile(
+      'Notes/Hello.md',
+      '# My own note\n\nWork I would rather keep.'
+    );
+
+    const result = await writeEmailNote(ctx, email());
+
+    expect(result.notePath).toBe('Notes/Hello-1.md');
+    expect(noteText(vault, 'Notes/Hello.md')).toBe(
+      '# My own note\n\nWork I would rather keep.'
+    );
+    expect(noteText(vault, 'Notes/Hello-1.md')).toContain('email2obsidianID: 1');
+  });
+
+  it('keeps stepping past several foreign files', async () => {
+    const { ctx, vault } = await contextWithLateFile('Notes/Hello.md', 'Mine');
+    await vault.create('Notes/Hello-1.md', 'Also mine');
+
+    const result = await writeEmailNote(ctx, email());
+
+    expect(result.notePath).toBe('Notes/Hello-2.md');
+    expect(noteText(vault, 'Notes/Hello.md')).toBe('Mine');
+    expect(noteText(vault, 'Notes/Hello-1.md')).toBe('Also mine');
+  });
+
+  it('does rewrite a note this plugin wrote, so a re-fetch does not pile up copies', async () => {
+    const { ctx, vault } = await contextWithLateFile(
+      'Notes/Hello.md',
+      ['---', 'title: "Hello"', 'email2obsidianID: 1', '---', '', 'Older body'].join('\n')
+    );
+
+    const result = await writeEmailNote(ctx, email({ markdownBody: 'Newer body' }));
+
+    expect(result.notePath).toBe('Notes/Hello.md');
+    expect(noteText(vault, 'Notes/Hello.md')).toContain('Newer body');
+  });
+
+  it('claims an empty file, which is all an interrupted run of its own leaves', async () => {
+    // Phase one writes the note empty and phase two fills it. A crash between
+    // the two leaves nothing to lose, so the name stays usable.
+    const { ctx, vault } = await contextWithLateFile('Notes/Hello.md', '');
+
+    const result = await writeEmailNote(ctx, email());
+
+    expect(result.notePath).toBe('Notes/Hello.md');
+    expect(noteText(vault, 'Notes/Hello.md')).toContain('email2obsidianID: 1');
+  });
+
+  it('does not mistake a body mentioning the property for frontmatter', async () => {
+    const { ctx, vault } = await contextWithLateFile(
+      'Notes/Hello.md',
+      'Notes on the plugin: it writes email2obsidianID: 42 into frontmatter.'
+    );
+
+    const result = await writeEmailNote(ctx, email());
+
+    expect(result.notePath).toBe('Notes/Hello-1.md');
+    expect(noteText(vault, 'Notes/Hello.md')).toContain('Notes on the plugin');
+  });
+});
+
+describe('writeEmailNote when the fill-in step fails', () => {
+  it('takes back the empty note it created, so no blank twin is left behind', async () => {
+    const { ctx, vault } = await makeContext();
+    const failing: WriteEmailNoteContext = {
+      ...ctx,
+      downloadAttachment: () => {
+        throw new ApiError('rate-limited', 'slow down', 429);
+      },
+      sleep: async () => {},
+    };
+
+    await expect(
+      writeEmailNote(failing, email({ attachments: [attachment({ id: 10 })] }))
+    ).rejects.toMatchObject({ code: 'rate-limited' });
+
+    // Left there, it would be a blank note in the inbox for ever, and the
+    // next run would write this email beside it as `Hello-1.md`.
+    expect(vault.getAbstractFileByPath('Notes/Hello.md')).toBeNull();
+  });
+
+  it('leaves a note alone if something else has written to it in the meantime', async () => {
+    const { ctx, vault } = await makeContext();
+    const failing: WriteEmailNoteContext = {
+      ...ctx,
+      downloadAttachment: async () => {
+        const placeholder = vault.getAbstractFileByPath('Notes/Hello.md') as TFile;
+        placeholder.text = 'Someone else got here first.';
+        throw new ApiError('rate-limited', 'slow down', 429);
+      },
+      sleep: async () => {},
+    };
+
+    await expect(
+      writeEmailNote(failing, email({ attachments: [attachment({ id: 10 })] }))
+    ).rejects.toMatchObject({ code: 'rate-limited' });
+
+    expect(noteText(vault, 'Notes/Hello.md')).toBe('Someone else got here first.');
   });
 });

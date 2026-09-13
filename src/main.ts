@@ -13,6 +13,7 @@ import { ApiError, createE2oClient, type E2oClient } from './api';
 import { runSync, SyncMode } from './pipeline';
 import { openLedger, type PendingRelease } from './fetch-ledger';
 import { isRootPath } from './path-utils';
+import { pluginDataStore } from './plugin-data';
 import {
   describeDeclines,
   filtersByMarker,
@@ -87,6 +88,12 @@ export default class Email2ObsidianPlugin extends Plugin {
   private isSyncing = false;
   private intervalHandle: number | null = null;
   /**
+   * Set the moment Obsidian starts unloading the plugin. A fetch already in
+   * flight reads it and stops rather than carrying on writing notes and
+   * popping up notices from a plugin the user has just turned off.
+   */
+  private unloading = false;
+  /**
    * The one seam everything under a sync reports through. Rebuilt whenever
    * settings change so the debug toggle takes effect immediately; the Obsidian
    * half (`Notice`, `console`) is wired here and nowhere else.
@@ -114,33 +121,60 @@ export default class Email2ObsidianPlugin extends Plugin {
     });
 
     if (this.settings.runOnOpen) {
-      void this.handleSync('fetch-new');
+      // Not straight away: at `onload` Obsidian is still building the vault
+      // index, and both the Note Namer's folder scan and every attachment
+      // path resolve against it.
+      this.app.workspace.onLayoutReady(() => {
+        if (this.unloading) return;
+        void this.handleSync('fetch-new');
+      });
     }
 
     this.setupScheduler(false);
   }
 
   async loadSettings(): Promise<void> {
-    const raw: unknown = await this.loadData();
-    const envelope = isRecord(raw) ? raw : {};
+    const envelope = await pluginDataStore(this).read();
     const stored =
       Object.prototype.hasOwnProperty.call(envelope, 'settings')
         ? envelope.settings
-        : raw;
+        : envelope;
     this.settings = normalizeSettings(stored);
   }
 
+  /**
+   * Through the store, because `settings` shares `data.json` with the Fetch
+   * Ledger's `fetch-log`. Reading the envelope here and saving it back is only
+   * safe while no other owner writes in between, and a fetch running in the
+   * background is exactly that other owner — one it would cost the user their
+   * import history to lose to.
+   */
   async saveSettings(): Promise<void> {
-    const raw: unknown = await this.loadData();
-    const envelope = isRecord(raw) ? { ...raw } : {};
-    envelope.settings = this.settings;
-    await this.saveData(envelope);
+    await pluginDataStore(this).update((envelope) => ({
+      ...envelope,
+      settings: this.settings,
+    }));
   }
 
   async updateSettings(partial: Partial<Email2ObsidianSettings>): Promise<void> {
     const prevPeriodic = this.settings.periodicSync;
     const prevApiKey = this.settings.apiKey;
-    this.settings = normalizeSettings({ ...this.settings, ...partial });
+    const prevNotesFolder = this.settings.notesFolder;
+    this.settings = normalizeSettings(
+      { ...this.settings, ...partial },
+      {
+        // A folder that cannot be made into a path used to reset the setting
+        // to the shipped default without saying so, so the next fetch quietly
+        // filed the user's email somewhere else entirely.
+        fallbackFolder: prevNotesFolder,
+        onRejectedFolder: (typed) => {
+          this.report.notice(
+            `"${typed}" can't be used as a folder name, so notes are still going to ` +
+              `${prevNotesFolder.length ? prevNotesFolder : 'the vault root'}.`
+          );
+        },
+      }
+    );
     this.report = this.makeReport(this.settings.debugLogging);
     if (this.settings.apiKey !== prevApiKey) {
       this.client = this.makeClient(this.settings.apiKey);
@@ -154,6 +188,8 @@ export default class Email2ObsidianPlugin extends Plugin {
   private makeReport(debugEnabled: boolean): SyncReport {
     return createSyncReport({
       showNotice: (msg) => {
+        // Nothing pops up from a plugin the user has just turned off.
+        if (this.unloading) return;
         new Notice(msg);
       },
       debugEnabled,
@@ -189,7 +225,13 @@ export default class Email2ObsidianPlugin extends Plugin {
         plugin: this,
         client: this.client,
         report: this.report,
+        isCancelled: () => this.unloading,
       });
+
+      // The run has already committed whatever notes it wrote — that has to
+      // happen, or they import again — but nothing further belongs to a
+      // plugin that is being unloaded.
+      if (this.unloading) return;
 
       this.settings.lastRunAt = new Date().toISOString();
       // What settings shows between runs, replaced rather than merged: both
@@ -245,16 +287,73 @@ export default class Email2ObsidianPlugin extends Plugin {
       void this.handleSync('fetch-new');
     }
 
-    this.intervalHandle = window.setInterval(() => {
-      void this.handleSync('fetch-new');
-    }, delay);
+    // Registered with Obsidian as well as held here: Obsidian clears its
+    // registered intervals on unload, so a mistake in this class can no
+    // longer leave a timer running after the plugin is gone.
+    this.intervalHandle = this.registerInterval(
+      window.setInterval(() => {
+        void this.handleSync('fetch-new');
+      }, delay)
+    );
     this.report.debug(`Scheduled periodic sync every ${delay}ms`);
   }
 
   onunload(): void {
+    this.unloading = true;
     if (this.intervalHandle) {
       window.clearInterval(this.intervalHandle);
     }
+  }
+}
+
+/**
+ * How long a text field waits after the last keystroke before it saves.
+ *
+ * Every `onChange` used to be a full settings save: forty writes to
+ * `data.json` for a forty-character API key, each one another chance to
+ * collide with a running fetch, and each one restarting the background fetch
+ * timer. Long enough that ordinary typing saves once; short enough that a user
+ * who types and immediately clicks elsewhere in Obsidian has already saved.
+ */
+const TEXT_SAVE_DELAY_MS = 700;
+
+/**
+ * A text field's save, held until the typing stops. `flush` is what makes the
+ * wait safe: leaving the field, or closing the settings tab, commits the
+ * pending value immediately rather than racing the timer.
+ */
+class DebouncedSave {
+  private handle: number | null = null;
+  /** The value waiting to be saved; `null` when nothing is waiting. */
+  private pending: string | null = null;
+
+  constructor(
+    private readonly delayMs: number,
+    private readonly save: (value: string) => Promise<void>
+  ) {}
+
+  schedule(value: string): void {
+    this.pending = value;
+    this.cancelTimer();
+    this.handle = window.setTimeout(() => {
+      void this.flush();
+    }, this.delayMs);
+  }
+
+  async flush(): Promise<void> {
+    this.cancelTimer();
+    if (this.pending === null) return;
+    const value = this.pending;
+    // Cleared before the await, so a keystroke arriving mid-save schedules a
+    // fresh one rather than being swallowed as already handled.
+    this.pending = null;
+    await this.save(value);
+  }
+
+  private cancelTimer(): void {
+    if (this.handle === null) return;
+    window.clearTimeout(this.handle);
+    this.handle = null;
   }
 }
 
@@ -284,6 +383,8 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
    * in. Set while this tab drives the control itself.
    */
   private redrawingUnmarked = false;
+  /** Every debounced text field on the tab, so they can all be flushed. */
+  private textSaves: DebouncedSave[] = [];
 
   constructor(app: App, plugin: Email2ObsidianPlugin) {
     super(app, plugin);
@@ -293,6 +394,9 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
+    // The fields about to be replaced may still be holding a keystroke, and
+    // the new ones read from settings — so commit before rebuilding.
+    this.flushTextSaves();
 
     // A Setting rather than a bare div so the intro shares the padding and
     // left edge of every row beneath it.
@@ -317,9 +421,9 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
         text.inputEl.type = 'password';
         text.setPlaceholder('Example: 12345678-1234-1234-1234-123456789abc');
         text.setValue(this.plugin.settings.apiKey);
-        text.onChange(async (value) => {
-          await this.plugin.updateSettings({ apiKey: value });
-        });
+        this.debounceText(text.inputEl, (value) =>
+          this.plugin.updateSettings({ apiKey: value })
+        );
       })
       .addButton((button) => {
         button.setButtonText('Test connection');
@@ -344,14 +448,27 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
       .addText((text) => {
         text.setPlaceholder('(blank for root)');
         text.setValue(this.plugin.settings.notesFolder);
-        text.onChange(async (value) => {
-          await this.plugin.updateSettings({ notesFolder: value });
-        });
+        this.debounceText(
+          text.inputEl,
+          (value) => this.plugin.updateSettings({ notesFolder: value }),
+          {
+            // What was typed and what was stored can differ — `Inbox//Mail`
+            // is kept as `Inbox/Mail`, and a name that cannot be used at all
+            // leaves the previous folder in place. Show the stored value once
+            // the user leaves the field, rather than a value that is not what
+            // the plugin will actually use.
+            // A block body, not an expression: Obsidian's components carry a
+            // `then`, so returning one reads as a misused promise.
+            onBlur: () => {
+              text.setValue(this.plugin.settings.notesFolder);
+            },
+          }
+        );
       });
 
     new Setting(containerEl)
       .setHeading()
-      .setName('Fetch Notes Automatically');
+      .setName('Fetch notes automatically');
 
     new Setting(containerEl)
       .setName('Background fetch')
@@ -379,7 +496,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Fetch interval')
-      .setDesc('How frequently would you like to check for new notes? (Only if Background Fetch is enabled.)')
+      .setDesc('How often should the plugin check for new notes? Only used when background fetch is on.')
       .addDropdown((dropdown) => {
         dropdown
           .addOptions({
@@ -510,7 +627,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setHeading()
-      .setName('Vault Routing (Pro Only)')
+      .setName('Vault routing (Pro only)')
       .setDesc(headingDesc);
 
     const markersDesc = document.createDocumentFragment();
@@ -537,9 +654,9 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
       .setName('Markers')
       .setDesc(markersDesc)
       .addText((text) => {
-        text.setPlaceholder('E.g. work; second brain');
+        text.setPlaceholder('For example: work; second brain');
         text.setValue(formatVaultMarkers(settings.vaultMarkers));
-        text.onChange(async (value) => {
+        this.debounceText(text.inputEl, async (value) => {
           await this.plugin.updateSettings({ vaultMarkers: parseVaultMarkers(value) });
           // Typing the first marker is what gives the unmarked question
           // something to do; clearing the last one takes it away again.
@@ -568,6 +685,11 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
         button.setButtonText('Fetch now');
         button.setDisabled(true);
         button.onClick(() => {
+          // This whole tab is built with `display()`, which Obsidian 1.13
+          // deprecated in favour of `getSettingDefinitions`. Migrating it is
+          // its own piece of work; until then, redrawing after a fetch is
+          // what shows the user the emails that just arrived.
+          // eslint-disable-next-line @typescript-eslint/no-deprecated
           void this.plugin.handleSync('fetch-new').then(() => this.display());
         });
       });
@@ -583,6 +705,43 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
             'above have nothing to match until vault routing is enabled.'
         );
     }
+  }
+
+  /**
+   * Wire a text field to save on a pause in typing rather than on every
+   * keystroke, and immediately when the field loses focus.
+   */
+  private debounceText(
+    inputEl: HTMLInputElement,
+    save: (value: string) => Promise<void>,
+    options: { onBlur?: () => void } = {}
+  ): void {
+    const saver = new DebouncedSave(TEXT_SAVE_DELAY_MS, save);
+    this.textSaves.push(saver);
+    inputEl.addEventListener('input', () => {
+      saver.schedule(inputEl.value);
+    });
+    inputEl.addEventListener('blur', () => {
+      // After the save, not before: `onBlur` is for showing what was stored.
+      void saver.flush().then(() => options.onBlur?.());
+    });
+  }
+
+  /**
+   * Obsidian calls this when the settings modal closes or the user switches
+   * tabs — the one moment a half-typed field would otherwise be lost, because
+   * closing the modal need not blur the field first.
+   */
+  hide(): void {
+    this.flushTextSaves();
+    super.hide();
+  }
+
+  /** Commit whatever the text fields are still holding, and let them go. */
+  private flushTextSaves(): void {
+    const saves = this.textSaves;
+    this.textSaves = [];
+    for (const saver of saves) void saver.flush();
   }
 
   /**
@@ -693,7 +852,23 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
   }
 }
 
-function normalizeSettings(raw: unknown): Email2ObsidianSettings {
+export interface NormalizeSettingsOptions {
+  /**
+   * What the notes folder falls back to when what was typed cannot be made
+   * into a path. Defaults to the shipped folder, which is right for a first
+   * load; the settings panel passes the folder already in use, so a typo
+   * leaves the user's own folder alone rather than silently moving their
+   * email somewhere else.
+   */
+  fallbackFolder?: string;
+  /** Told what was rejected, so the user can be told too. */
+  onRejectedFolder?: (typed: string) => void;
+}
+
+function normalizeSettings(
+  raw: unknown,
+  options: NormalizeSettingsOptions = {}
+): Email2ObsidianSettings {
   const candidate =
     raw && typeof raw === 'object'
       ? (raw as Partial<Email2ObsidianSettings>)
@@ -703,9 +878,14 @@ function normalizeSettings(raw: unknown): Email2ObsidianSettings {
   const notesFolder = normalizeFolder(merged.notesFolder, { allowRoot: true });
   const syncInterval = normalizeSyncInterval(merged.syncInterval);
 
+  if (notesFolder === null && typeof merged.notesFolder === 'string') {
+    options.onRejectedFolder?.(merged.notesFolder);
+  }
+
   return {
     apiKey: typeof merged.apiKey === 'string' ? merged.apiKey.trim() : '',
-    notesFolder: notesFolder ?? DEFAULT_SETTINGS.notesFolder,
+    notesFolder:
+      notesFolder ?? options.fallbackFolder ?? DEFAULT_SETTINGS.notesFolder,
     periodicSync: Boolean(merged.periodicSync),
     syncInterval,
     runOnOpen: Boolean(merged.runOnOpen),
@@ -800,6 +980,8 @@ function syncIntervalToMs(interval: SyncInterval): number {
 
 // Exported for testing
 export {
+  DebouncedSave,
+  TEXT_SAVE_DELAY_MS,
   normalizeMarkerCounts,
   normalizeSettings,
   normalizeFolder,

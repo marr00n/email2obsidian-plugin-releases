@@ -1,4 +1,6 @@
+/* global setTimeout */
 import { Vault, TFile, FileManager } from 'obsidian';
+import { ApiError } from './api';
 import type { AttachmentDownload, AttachmentMeta, DownloadAttachment } from './api';
 import { basename, extname } from './path-utils';
 import { mapWithConcurrency } from './concurrency';
@@ -18,7 +20,11 @@ export interface SaveAttachmentsOptions {
   report: SyncReport;
   /** The Service Client's `downloadAttachment`; credentials live in the client. */
   downloader: DownloadAttachment;
+  /** How the retry pause is taken. Injectable so tests need not really wait. */
+  sleep?: Sleep;
 }
+
+export type Sleep = (ms: number) => Promise<void>;
 
 export interface SaveAttachmentsResult {
   errors: AttachmentSaveError[];
@@ -124,10 +130,39 @@ export async function saveBinaryData(opts: {
 }
 
 /**
+ * How long to wait before each retry of a rate-limited download.
+ *
+ * One, deliberately: the transport already retries a 429 once (`safeFetch`),
+ * so each attempt here is two requests, and a rate limit that survives both
+ * of these is the service meaning it.
+ */
+const RATE_LIMIT_RETRY_DELAYS_MS = [3000];
+
+const defaultSleep: Sleep = (ms) =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+function isRateLimited(error: unknown): boolean {
+  return error instanceof ApiError && error.code === 'rate-limited';
+}
+
+/**
  * Download and save the given (already non-inline) attachments to the vault,
  * collision-proofing filenames. Targets the attachment folder when provided,
  * otherwise the note folder. The note at `sourcePath` must already exist —
  * Obsidian resolves relative attachment locations against it.
+ *
+ * ## A rate limit is the run's problem, not the file's
+ *
+ * Every other download failure is per-file: it is reported, the note is
+ * written with the link it can manage, and the email counts as done. A rate
+ * limit cannot be treated that way. The service is asking the whole run to
+ * slow down, so skipping the file would write a note with a broken link, mark
+ * the email as imported — a re-fetch will never repair it — and carry on
+ * hammering the service for every attachment after it.
+ *
+ * So a rate-limited download is retried after a pause, and if it is still
+ * rate limited it is thrown, out through `writeEmailNote` to `runSync`, which
+ * stops the run and leaves the email unrecorded for the next one.
  */
 export async function saveAttachments(
   opts: SaveAttachmentsOptions
@@ -139,15 +174,19 @@ export async function saveAttachments(
     sourcePath,
     report,
     downloader,
+    sleep = defaultSleep,
   } = opts;
 
   const errors: AttachmentSaveError[] = [];
   const savedPathById: Record<number, string> = {};
 
-  // No `shouldStop` is passed here, so `mapWithConcurrency` never leaves a
-  // hole: every item runs and lands a defined result at its index. The cast
-  // reflects that guarantee rather than weakening it away.
-  const downloads = (await mapWithConcurrency(
+  // Held rather than thrown from inside the worker: a second worker throwing
+  // after the pool has already rejected would have nowhere to land. Once set,
+  // `shouldStop` keeps the pool from starting any download it has not begun,
+  // and the run is abandoned below.
+  let rateLimit: unknown = null;
+
+  const downloads = await mapWithConcurrency(
     nonInlineAttachments,
     3,
     async (att, index) => {
@@ -160,16 +199,29 @@ export async function saveAttachments(
       });
 
       try {
-        const downloaded = await downloader(att.id, baseName);
+        const downloaded = await downloadWithRetry({
+          downloader,
+          att,
+          baseName,
+          report,
+          sleep,
+        });
         return { att, baseName, downloaded };
       } catch (error) {
+        if (isRateLimited(error)) {
+          rateLimit = error;
+          return null;
+        }
         const errObj = toAttachmentSaveError(att, error);
         report.warn(`Attachment ${att.id}: ${errObj.message}`);
         errors.push(errObj);
         return null;
       }
-    }
-  )) as ({ att: AttachmentMeta; baseName: string; downloaded: AttachmentDownload } | null)[];
+    },
+    { shouldStop: () => rateLimit !== null }
+  );
+
+  if (rateLimit) throw rateLimit;
 
   for (const item of downloads) {
     if (!item || !item.downloaded) continue;
@@ -193,6 +245,35 @@ export async function saveAttachments(
   }
 
   return { errors, savedPathById };
+}
+
+/**
+ * One attachment's download, retried while the service is asking for a pause.
+ * Any other failure is handed straight back to the caller, which reports it
+ * per file; a rate limit that outlasts every retry is handed back too, and
+ * the caller treats that one as the end of the run.
+ */
+async function downloadWithRetry(opts: {
+  downloader: DownloadAttachment;
+  att: AttachmentMeta;
+  baseName: string;
+  report: SyncReport;
+  sleep: Sleep;
+}): Promise<AttachmentDownload> {
+  const { downloader, att, baseName, report, sleep } = opts;
+
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await downloader(att.id, baseName);
+    } catch (error) {
+      const delay = RATE_LIMIT_RETRY_DELAYS_MS[attempt];
+      if (!isRateLimited(error) || delay === undefined) throw error;
+      report.debug(
+        `Attachment ${att.id}: rate limited, retrying in ${delay}ms (attempt ${attempt + 1})`
+      );
+      await sleep(delay);
+    }
+  }
 }
 
 function sanitizeAttachmentName(name: string, id?: number): string {

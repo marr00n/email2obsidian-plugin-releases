@@ -22,6 +22,30 @@ jobs:
 
       - run: npm ci
 
+      # Nothing below this line runs if a check fails, so a tag can no longer
+      # publish a release that does not build, does not pass its tests, or
+      # names a version the plugin itself does not claim.
+      - name: Check the tag matches manifest.json and package.json
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          manifest=$(node -p "require('./manifest.json').version")
+          package=$(node -p "require('./package.json').version")
+          echo "tag=$tag manifest=$manifest package=$package"
+          if [ "$tag" != "$manifest" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match manifest.json version $manifest"
+            exit 1
+          fi
+          if [ "$tag" != "$package" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $package"
+            exit 1
+          fi
+
+      - name: Run tests
+        run: npx vitest run
+
+      - name: Run lint
+        run: npm run lint
+
       - run: npm run build
 
       - name: Attest main.js

@@ -10,6 +10,17 @@ function bytes(values: number[]): ArrayBuffer {
   return new Uint8Array(values).buffer;
 }
 
+/**
+ * The wire timestamp the pretend server stamps on everything. Recent on
+ * purpose: the real service deletes an email after 72 hours, so nothing older
+ * is ever in the stream, and the ledger's retention rules read this date.
+ */
+function recentWireTimestamp(): string {
+  return new Date(Date.now() - 60 * 60 * 1000).toISOString().slice(0, 19);
+}
+
+const WIRE_NOW = recentWireTimestamp();
+
 function noteText(vault: Vault, path: string): string {
   const file = vault.getAbstractFileByPath(path);
   expect(file).toBeInstanceOf(TFile);
@@ -59,7 +70,7 @@ function fakeServer(pages: WireEmail[][]): FakeServer {
             fileName: `doc-${email.id}.txt`,
             fileSize: 1,
             mimeType: 'text/plain',
-            createdAt: '2021-01-01 00:00:00',
+            createdAt: WIRE_NOW,
             contentDisposition: 'attachment',
           },
         ]
@@ -78,7 +89,7 @@ function fakeServer(pages: WireEmail[][]): FakeServer {
           emails: page.map((email) => ({
             id: email.id,
             subject: email.subject,
-            createdAt: '2021-01-01 00:00:00',
+            createdAt: WIRE_NOW,
             hashtags: [],
             vault: email.vault ?? null,
           })),
@@ -97,7 +108,7 @@ function fakeServer(pages: WireEmail[][]): FakeServer {
         return jsonResponse(200, {
           id: email.id,
           subject: email.subject,
-          createdAt: '2021-01-01 00:00:00',
+          createdAt: WIRE_NOW,
           hashtags: [],
           vault: email.vault ?? null,
           markdownBody: `Body of ${email.subject}.`,
@@ -256,7 +267,7 @@ describe('pipeline runSync', () => {
     expect(result.synced).toBe(1);
 
     const text = noteText(vault, 'Notes/No tags.md');
-    expect(text).toContain('tags: [email2obsidian]');
+    expect(text).toContain('tags: ["email2obsidian"]');
   });
 
   it('never fetches page 2 when page 1 already holds a logged id', async () => {
@@ -807,5 +818,165 @@ describe('pipeline runSync receive policy', () => {
     });
 
     expect(result.starterSignature).toBe(false);
+  });
+});
+
+describe('runSync when the service rate limits an attachment', () => {
+  /** One email with one attachment, whose download answers with `status`. */
+  function serverWithAttachmentStatus(status: number) {
+    return createFakeHttp([
+      {
+        pattern: /^\/api\/emails$/,
+        handler: () =>
+          jsonResponse(200, {
+            emails: [
+              {
+                id: 1,
+                subject: 'Invoice',
+                createdAt: '2021-01-01 00:00:00',
+                hashtags: [],
+                vault: null,
+              },
+            ],
+            hasMore: false,
+          }),
+      },
+      {
+        pattern: /^\/api\/emails\/1$/,
+        handler: () =>
+          jsonResponse(200, {
+            id: 1,
+            subject: 'Invoice',
+            createdAt: '2021-01-01 00:00:00',
+            hashtags: [],
+            vault: null,
+            markdownBody: 'Body',
+            attachments: [
+              {
+                id: 100,
+                fileName: 'doc.txt',
+                fileSize: 1,
+                mimeType: 'text/plain',
+                createdAt: '2021-01-01 00:00:00',
+                contentDisposition: 'attachment',
+              },
+            ],
+          }),
+      },
+      {
+        pattern: /^\/api\/attachments\/100\/download$/,
+        handler: () => jsonResponse(status, { status, message: 'Rate limited' }),
+      },
+    ]);
+  }
+
+  it('stops the run and leaves the email unlogged, rather than writing a broken note', async () => {
+    const vault = new Vault();
+    const plugin = new Plugin(new App(vault));
+    const notices: string[] = [];
+
+    const result = await runSync({
+      mode: 'fetch-new',
+      settings: { apiKey: 'k', notesFolder: 'Notes' },
+      vault,
+      plugin,
+      client: createE2oClient({ apiKey: 'k', http: serverWithAttachmentStatus(429) }),
+      report: createSyncReport({
+        showNotice: (msg) => notices.push(msg),
+        debugEnabled: false,
+      }),
+      sleep: async () => {},
+    });
+
+    // Counted as a rate limit, not as one email with one bad attachment.
+    expect(result.synced).toBe(0);
+    expect(notices[0]).toMatch(/rate limit/i);
+
+    // Unlogged, so the next run fetches it again and gets the attachment...
+    const stored = (await plugin.loadData()) as { 'fetch-log'?: Record<string, unknown> };
+    expect(stored['fetch-log'] ?? {}).toEqual({});
+    // ...and no empty note is left behind for it to trip over.
+    expect(noteExists(vault, 'Notes/Invoice.md')).toBe(false);
+  });
+
+  it('still writes the note when the attachment fails for any other reason', async () => {
+    const vault = new Vault();
+    const plugin = new Plugin(new App(vault));
+
+    const result = await runSync({
+      mode: 'fetch-new',
+      settings: { apiKey: 'k', notesFolder: 'Notes' },
+      vault,
+      plugin,
+      client: createE2oClient({ apiKey: 'k', http: serverWithAttachmentStatus(500) }),
+      sleep: async () => {},
+    });
+
+    expect(result.synced).toBe(1);
+    expect(result.attachmentErrors).toHaveLength(1);
+    expect(noteText(vault, 'Notes/Invoice.md')).toContain('email2obsidianID: 1');
+  });
+});
+
+describe('runSync when the plugin is unloading', () => {
+  it('starts no further email and commits what it already wrote', async () => {
+    const vault = new Vault();
+    const plugin = new Plugin(new App(vault));
+    const server = fakeServer([
+      [
+        { id: 3, subject: 'Third' },
+        { id: 2, subject: 'Second' },
+        { id: 1, subject: 'First' },
+      ],
+    ]);
+
+    let unloading = false;
+    const result = await runSync({
+      mode: 'fetch-new',
+      settings: { apiKey: 'k', notesFolder: 'Notes' },
+      vault,
+      plugin,
+      client: createE2oClient({ apiKey: 'k', http: server.http }),
+      // Turned off the moment the first detail request goes out.
+      isCancelled: () => {
+        const wasCancelled = unloading;
+        unloading = server.detailCalls.length > 0;
+        return wasCancelled;
+      },
+    });
+
+    // Whatever was in flight finished; nothing new was started.
+    expect(server.detailCalls.length).toBeLessThan(3);
+    expect(result.synced).toBe(server.detailCalls.length);
+
+    // What it did write is logged, so a later run does not import it twice.
+    const stored = (await plugin.loadData()) as { 'fetch-log'?: Record<string, unknown> };
+    expect(Object.keys(stored['fetch-log'] ?? {})).toHaveLength(result.synced);
+  });
+});
+
+describe('Vault Markers written two ways', () => {
+  it('claims an email whose marker is spelled with a different Unicode accent', async () => {
+    const vault = new Vault();
+    const plugin = new Plugin(new App(vault));
+    // The service returns the marker precomposed; the user typed it with a
+    // combining accent, or the other way round, depending on the device.
+    const server = fakeServer([[{ id: 1, subject: 'Une note', vault: 'Caf\u00e9' }]]);
+
+    const result = await runSync({
+      mode: 'fetch-new',
+      settings: {
+        apiKey: 'k',
+        notesFolder: 'Notes',
+        vaultMarkers: ['Cafe\u0301'],
+        receiveUnmarked: false,
+      },
+      vault,
+      plugin,
+      client: createE2oClient({ apiKey: 'k', http: server.http }),
+    });
+
+    expect(result.synced).toBe(1);
+    expect(result.declined).toBe(0);
   });
 });

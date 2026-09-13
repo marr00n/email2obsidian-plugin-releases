@@ -11,7 +11,7 @@ Send an email and it appears in your Obsidian vault as a complete note, includin
 - **Works on desktop and mobile** — access your ingestion address from any device
 - **Flexible sync** — trigger manually, on a schedule, or automatically when your vault opens
 - **Safe file handling** — new notes never overwrite existing files in your vault
-- **Configurable attachment storage** — choose where attachments are saved within your vault
+- **Attachments handled by Obsidian** — files land wherever your Obsidian attachment settings put them
 - **Strong privacy** — emails are automatically deleted after 72 hours and are never sold, shared, or used for AI training; no vault telemetry
 
 ## How it works
@@ -41,7 +41,6 @@ Send an email and it appears in your Obsidian vault as a complete note, includin
 2) Open Settings → Email2Obsidian and configure:
    - **API Key** (required; sent as `x-api-key`; use “Test connection” to verify)
    - **Notes folder** (optional; leave blank or `.` to write into the vault root; otherwise auto-created with default `E2Oinbox`)
-   - **Attachment folder** (optional; if set, all attachments/inline references will point here)
    - **Periodic sync** + **Interval** (1h/3h/6h/12h/daily); runs immediately when enabled
    - **Run on open** (optional one-time sync on app launch; interval countdown restarts on open)
 3) Use the command palette:
@@ -53,7 +52,7 @@ Send an email and it appears in your Obsidian vault as a complete note, includin
 ## Behaviour Notes
 - Each email is only fetched once.
 - Notes are saved with safe, unique filenames (e.g. -1, -2 added if required).
-- Attachments saved to the attachment folder if set; otherwise beside the note.
+- Attachments follow Obsidian's own attachment location setting (Settings → Files and links).
 
 ## Disclosures
 - Requires an Email2Obsidian account and API key.

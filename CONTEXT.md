@@ -50,6 +50,14 @@ may stop at the first entry it recognises: everything older is already in the
 ledger.
 _Avoid_: fetch log, seen set, logged ids, history, dedupe cache
 
+**Plugin Data Store**:
+The one way into `data.json`, the single file the settings and the **Fetch
+Ledger** share. Both change it by reading the whole envelope, replacing their
+own key and writing it back, so the store runs those read-modify-writes one
+after another — overlapping them silently drops whichever change was written
+first, and a dropped ledger makes the plugin re-import email it already has.
+_Avoid_: settings file, saveData wrapper, persistence layer, cache
+
 ## Relationships
 
 - A **Vault Marker** names at most one intended **Obsidian Vault**
@@ -59,6 +67,8 @@ _Avoid_: fetch log, seen set, logged ids, history, dedupe cache
   see nor name any other
 - **Vault Markers** are compared case-insensitively: `Work` and `work` name
   the same **Obsidian Vault**
+- The settings and the **Fetch Ledger** are the only two owners of
+  `data.json`, and each reaches it through the **Plugin Data Store**
 
 ## Example dialogue
 

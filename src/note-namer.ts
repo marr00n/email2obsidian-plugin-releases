@@ -21,6 +21,21 @@ export interface NoteNamer {
   reserve(subject: string, createdAt: string): string;
 }
 
+/**
+ * The longest filename the file systems Obsidian runs on accept, in UTF-8
+ * bytes. A long email subject sails past it and the create is refused, which
+ * before this cap meant the email failed on every run until the service
+ * deleted it 72 hours later.
+ */
+const MAX_FILENAME_BYTES = 255;
+
+/**
+ * Names Windows refuses whatever the extension. A subject of exactly `NUL`
+ * is unlikely; costing an email its only three days of life is not worth the
+ * odds.
+ */
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
 export interface OpenNoteNamesOptions {
   /**
    * Where a scan failure is reported. Defaults to the same prefixed
@@ -45,19 +60,71 @@ export async function openNoteNames(
 
   return {
     reserve(subject: string, createdAt: string): string {
-      const base = sanitizeFilename(subject || createdAt || 'email');
-      let candidate = `${base}.md`;
+      const base = baseNameFor(subject, createdAt);
+      let candidate = withinByteLimit(base, 0);
       let suffix = 1;
 
-      while (taken.has(candidate)) {
-        candidate = `${base}-${suffix}.md`;
+      while (taken.has(nameKey(candidate))) {
+        candidate = withinByteLimit(base, suffix);
         suffix += 1;
       }
 
-      taken.add(candidate);
+      taken.add(nameKey(candidate));
       return joinPosix(folder, candidate);
     },
   };
+}
+
+/**
+ * How one filename is compared against another.
+ *
+ * Exact text is the wrong test. macOS and Windows both treat `Report.md` and
+ * `report.md` as one file, and macOS also treats the two Unicode spellings of
+ * an accented letter — `é` as one code point, or `e` plus a combining accent —
+ * as the same name. Comparing exactly, the namer called such a name free,
+ * Obsidian refused to create the file (it refuses; it does not overwrite),
+ * and the email failed on every run until the service deleted it. Folding
+ * case and normalising the accents makes the namer see what the file system
+ * sees, so it moves on to `-1` as it would for any other collision.
+ */
+function nameKey(name: string): string {
+  return name.normalize('NFC').toLowerCase();
+}
+
+/**
+ * `base-<suffix>.md`, with the base trimmed until the whole name fits the
+ * byte limit. Trimmed by code point rather than by byte so a character is
+ * never cut in half, and the suffix is measured too — it is what has to
+ * survive, since it is what makes the name unique.
+ */
+function withinByteLimit(base: string, suffix: number): string {
+  const tail = suffix === 0 ? '.md' : `-${suffix}.md`;
+  const budget = MAX_FILENAME_BYTES - byteLength(tail);
+
+  let trimmed = '';
+  let used = 0;
+  for (const char of base) {
+    const size = byteLength(char);
+    if (used + size > budget) break;
+    trimmed += char;
+    used += size;
+  }
+
+  // Trimming can leave a trailing space or dot, which Windows refuses.
+  trimmed = trimmed.replace(/[\s.]+$/, '');
+  return `${trimmed.length ? trimmed : 'email'}${tail}`;
+}
+
+function byteLength(text: string): number {
+  let bytes = 0;
+  for (const char of text) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code < 0x10000) bytes += 3;
+    else bytes += 4;
+  }
+  return bytes;
 }
 
 /**
@@ -78,7 +145,7 @@ function scanFileNames(
     }
     for (const child of target.children) {
       if (child instanceof TFile) {
-        names.add(child.name);
+        names.add(nameKey(child.name));
       }
     }
   } catch (error: unknown) {
@@ -92,11 +159,28 @@ function scanFileNames(
   return names;
 }
 
+/**
+ * The subject, or the date it arrived, or the word `email`.
+ *
+ * Each candidate is tested after sanitising, not before. A subject of `???`
+ * is not empty, but nothing survives sanitising it, and testing the raw text
+ * sent such an email to the literal name `email` rather than to the date this
+ * has always promised.
+ */
+function baseNameFor(subject: string, createdAt: string): string {
+  return sanitizeFilename(subject) || sanitizeFilename(createdAt) || 'email';
+}
+
+/** The cleaned name, or `''` when nothing of it survives. */
 function sanitizeFilename(input: string): string {
   const cleaned = input
     .replace(/[\\/*?"<>|]+/g, ' ')
     .replace(/:/g, '-')
     .replace(/\s+/g, ' ')
+    .trim()
+    // Windows refuses a name ending in a dot; the trim above took the spaces.
+    .replace(/\.+$/, '')
     .trim();
-  return cleaned.length ? cleaned : 'email';
+  if (!cleaned.length) return '';
+  return WINDOWS_RESERVED.test(cleaned) ? `${cleaned}-note` : cleaned;
 }

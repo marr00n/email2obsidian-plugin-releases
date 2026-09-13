@@ -22,6 +22,7 @@
     "minimist": "1.2.8",
     "obsidian": "^1.13.1",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.15"
+    "vitest": "^4.0.15",
+    "yaml": "^2.9.0"
   }
 }

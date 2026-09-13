@@ -2,7 +2,7 @@ import { Plugin, Vault } from 'obsidian';
 import { ApiError, type E2oClient, type EmailSummary } from './api';
 import { openLedger, type SyncMode } from './fetch-ledger';
 import { openNoteNames } from './note-namer';
-import { AttachmentSaveError } from './attachments';
+import { AttachmentSaveError, type Sleep } from './attachments';
 import { writeEmailNote, type WriteEmailNoteContext } from './write-email-note';
 import { resolveNoteFolder } from './note-folder';
 import { basename } from './path-utils';
@@ -43,6 +43,17 @@ export interface SyncOptions {
    * plugin wants, so `main.ts` always supplies one.
    */
   report?: SyncReport;
+  /**
+   * How a retry pause is taken while the service is rate limiting attachment
+   * downloads. Injectable so tests need not really wait.
+   */
+  sleep?: Sleep;
+  /**
+   * Polled as the run goes, so an unloading plugin can stop it: no further
+   * email is started, whatever is in flight finishes, and the run commits
+   * what it wrote as a cut-short run.
+   */
+  isCancelled?: () => boolean;
 }
 
 export interface SyncResult {
@@ -128,7 +139,7 @@ export async function runSync(opts: SyncOptions): Promise<SyncResult> {
       claimed.push(summary);
       continue;
     }
-    ledger.decline(summary.id, summary.vaultMarker);
+    ledger.decline(summary.id, summary.vaultMarker, summary.createdAt);
     declinedMarkers.push(summary.vaultMarker);
   }
 
@@ -145,12 +156,14 @@ export async function runSync(opts: SyncOptions): Promise<SyncResult> {
     downloadAttachment: (id, expectedFileName) =>
       client.downloadAttachment(id, expectedFileName),
     report,
+    sleep: opts.sleep,
   };
 
   // Flipped by a worker the instant it hits a 429; read back by the pool
   // before it starts each not-yet-started item, so anything not already in
   // flight is skipped while in-flight work still finishes.
   let rateLimited = false;
+  const cancelled = (): boolean => opts.isCancelled?.() ?? false;
 
   const outcomes = await mapWithConcurrency<EmailSummary, EmailSyncOutcome>(
     claimed,
@@ -181,7 +194,7 @@ export async function runSync(opts: SyncOptions): Promise<SyncResult> {
         return { status: 'error', message };
       }
     },
-    { shouldStop: () => rateLimited }
+    { shouldStop: () => rateLimited || cancelled() }
   );
 
   let accepted = 0;
@@ -207,6 +220,12 @@ export async function runSync(opts: SyncOptions): Promise<SyncResult> {
     } else if (outcome.status === 'error') {
       errors.push(outcome.message);
     }
+  }
+
+  // Silent: the plugin is going away, and the user asked for that.
+  if (cancelled()) {
+    await ledger.commit({ mode, cutShort: true });
+    return result();
   }
 
   if (rateLimited) {

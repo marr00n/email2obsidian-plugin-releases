@@ -221,6 +221,14 @@ export function hasStarterSignature(
   return isUnmarked(email.vaultMarker) && email.subject.trimStart().startsWith('@@');
 }
 
+/**
+ * How two Vault Markers are compared.
+ *
+ * Case first, as it always was: `Work` and `work` name the same Obsidian
+ * Vault. Accents are normalised too, because the same marker typed on two
+ * devices can arrive in two Unicode spellings — `é` as one code point, or `e`
+ * plus a combining accent — and a vault would otherwise refuse its own mail.
+ */
 function foldCase(value: string): string {
-  return value.toLowerCase();
+  return value.normalize('NFC').toLowerCase();
 }

@@ -1,7 +1,15 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-import { createE2oClient, ApiError } from '../src/api';
+import { createE2oClient, ApiError, type HttpResponse } from '../src/api';
 import { createFakeHttp, jsonResponse, textResponse, binaryResponse } from './fake-http';
+
+/**
+ * Every other test here injects an http adapter, which leaves the default —
+ * Obsidian's `requestUrl` — untested. Stand in for it so what the client asks
+ * of it is visible.
+ */
+const requestUrlMock = vi.hoisted(() => vi.fn());
+vi.mock('obsidian', () => ({ requestUrl: requestUrlMock }));
 
 const API_KEY = 'test-key';
 
@@ -347,5 +355,185 @@ describe('createE2oClient / downloadAttachment', () => {
 
     expect(download.mimeType).toBe('image/png');
     expect(download.contentLength).toBe(1234);
+  });
+});
+
+describe('createE2oClient / default Obsidian transport', () => {
+  beforeEach(() => {
+    requestUrlMock.mockReset();
+  });
+
+  /**
+   * The real `requestUrl` rejects on a status of 400 or above unless it is
+   * told not to. Reproducing that here is the whole point: a stand-in that
+   * politely returns error responses is what let this defect through.
+   */
+  const obsidianBehaviour =
+    (response: HttpResponse) =>
+    (param: { throw?: boolean }): Promise<HttpResponse> =>
+      response.status >= 400 && param.throw !== false
+        ? Promise.reject(new Error(`Request failed, status ${response.status}`))
+        : Promise.resolve(response);
+
+  it('tells requestUrl not to throw, so an error status arrives as a response', async () => {
+    requestUrlMock.mockImplementation(
+      obsidianBehaviour(jsonResponse(429, { message: 'slow down' }))
+    );
+    const client = createE2oClient({ apiKey: API_KEY, warn: () => {} });
+
+    const error = await client.listEmails().catch((e) => e);
+
+    expect(requestUrlMock).toHaveBeenCalledWith(
+      expect.objectContaining({ throw: false })
+    );
+    // Without it `requestUrl` rejects on any status of 400 or above, and every
+    // 401, 429 and 5xx reaches the caller as a bare `network` failure with no
+    // status — the friendly messages and the rate-limit discipline that read
+    // the status could never run.
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).code).toBe('rate-limited');
+    expect((error as ApiError).status).toBe(429);
+  });
+
+  it('still sends the url, method and api key the client was built with', async () => {
+    requestUrlMock.mockImplementation(
+      obsidianBehaviour(jsonResponse(200, { emails: [], hasMore: false }))
+    );
+    const client = createE2oClient({ apiKey: API_KEY, warn: () => {} });
+
+    await client.listEmails({ sort: 'date-desc' });
+
+    expect(requestUrlMock).toHaveBeenCalledWith({
+      url: 'https://email2obsidian.com/api/emails?limit=100&sort=date-desc',
+      method: 'GET',
+      headers: { 'x-api-key': API_KEY },
+      throw: false,
+    });
+  });
+});
+
+describe('createE2oClient / paging and retries', () => {
+  const okPage = () => jsonResponse(200, { emails: [], hasMore: false });
+
+  it('asks for the largest page the service allows', async () => {
+    const urls: string[] = [];
+    const http = vi.fn(async (request: { url: string }) => {
+      urls.push(request.url);
+      return okPage();
+    });
+
+    // Six times fewer round trips over a full fetch than the service's
+    // default of 10, and six times fewer chances to be rate limited.
+    await createE2oClient({ apiKey: API_KEY, http }).listEmails();
+
+    expect(new URL(urls[0]).searchParams.get('limit')).toBe('100');
+  });
+
+  it('lets a caller ask for a different page size', async () => {
+    const urls: string[] = [];
+    const http = vi.fn(async (request: { url: string }) => {
+      urls.push(request.url);
+      return okPage();
+    });
+
+    await createE2oClient({ apiKey: API_KEY, http }).listEmails({ limit: 5 });
+
+    expect(new URL(urls[0]).searchParams.get('limit')).toBe('5');
+  });
+
+  it.each([
+    ['a rate limit', 429],
+    ['a server error', 503],
+  ])('retries once after %s and returns the second answer', async (_label, status) => {
+    const waits: number[] = [];
+    const http = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(status, { message: 'busy' }))
+      .mockResolvedValueOnce(jsonResponse(200, { emails: [], hasMore: false }));
+
+    const result = await createE2oClient({
+      apiKey: API_KEY,
+      http,
+      warn: () => {},
+      sleep: async (ms) => {
+        waits.push(ms);
+      },
+    }).listEmails();
+
+    expect(http).toHaveBeenCalledTimes(2);
+    expect(waits).toEqual([1000]);
+    expect(result.emails).toEqual([]);
+  });
+
+  it('waits as long as the service asks, when it asks for something short', async () => {
+    const waits: number[] = [];
+    const http = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(429, { message: 'busy' }, { 'Retry-After': '2' })
+      )
+      .mockResolvedValueOnce(jsonResponse(200, { emails: [], hasMore: false }));
+
+    await createE2oClient({
+      apiKey: API_KEY,
+      http,
+      warn: () => {},
+      sleep: async (ms) => {
+        waits.push(ms);
+      },
+    }).listEmails();
+
+    expect(waits).toEqual([2000]);
+  });
+
+  it('does not sit out a long Retry-After; it reports the rate limit instead', async () => {
+    const waits: number[] = [];
+    const http = vi.fn(async () =>
+      jsonResponse(429, { message: 'busy' }, { 'Retry-After': '600' })
+    );
+
+    const error = await createE2oClient({
+      apiKey: API_KEY,
+      http,
+      warn: () => {},
+      sleep: async (ms) => {
+        waits.push(ms);
+      },
+    })
+      .listEmails()
+      .catch((e) => e);
+
+    expect(waits).toEqual([]);
+    expect(http).toHaveBeenCalledTimes(1);
+    expect((error as ApiError).code).toBe('rate-limited');
+  });
+
+  it('retries a dropped connection once, then gives up', async () => {
+    const http = vi.fn(async () => {
+      throw new Error('net::ERR_CONNECTION_RESET');
+    });
+
+    const error = await createE2oClient({
+      apiKey: API_KEY,
+      http,
+      warn: () => {},
+      sleep: async () => {},
+    })
+      .listEmails()
+      .catch((e) => e);
+
+    expect(http).toHaveBeenCalledTimes(2);
+    expect((error as ApiError).code).toBe('network');
+  });
+
+  it('does not retry a failure that would fail the same way again', async () => {
+    const http = vi.fn(async () => jsonResponse(401, { message: 'nope' }));
+
+    const error = await createE2oClient({ apiKey: API_KEY, http, warn: () => {} })
+      .listEmails()
+      .catch((e) => e);
+
+    expect(http).toHaveBeenCalledTimes(1);
+    expect((error as ApiError).code).toBe('unauthorized');
   });
 });
