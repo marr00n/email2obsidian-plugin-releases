@@ -90,6 +90,10 @@ export class Vault {
     file.data = data;
   }
 
+  async read(file: TFile): Promise<string> {
+    return file.text ?? '';
+  }
+
   async create(p: string, contents: string): Promise<TFile> {
     const normalized = normalizePath(p);
     const file = new TFile(normalized, null, contents);

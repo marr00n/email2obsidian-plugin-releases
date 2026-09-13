@@ -143,7 +143,7 @@ describe('fetch ledger', () => {
     expect(Object.keys(log).sort()).toEqual(['6', '7', '9']);
   });
 
-  it('writes nothing when a fetch-all run is cut short', async () => {
+  it('appends what a cut-short fetch-all did rather than discarding it', async () => {
     const plugin = newPlugin();
     await plugin.saveData({ 'fetch-log': oldFormatLog() });
     const ledger = await openLedger(plugin, { clock });
@@ -151,8 +151,35 @@ describe('fetch ledger', () => {
     ledger.accept(9, 'Nine.md');
     await ledger.commit({ mode: 'fetch-all', cutShort: true });
 
-    // A rewrite from a partial run would have thrown away 6 and 7.
-    expect(await storedLog(plugin)).toEqual(oldFormatLog());
+    // Two ways to get this wrong. A rewrite would throw away 6 and 7; writing
+    // nothing at all would throw away 9, whose note is already on disk, and
+    // the next fetch would write it again as `Nine-1.md`.
+    expect(await storedLog(plugin)).toEqual({
+      '7': { fetchedAt: '2021-01-07T00:00:00.000Z', filename: 'Seven.md' },
+      '6': { fetchedAt: '2021-01-06T00:00:00.000Z', filename: undefined },
+      '9': { fetchedAt: clock(), filename: 'Nine.md' },
+    });
+  });
+
+  it('keeps a released id a cut-short fetch-all never reached', async () => {
+    const plugin = newPlugin();
+    await plugin.saveData({
+      'fetch-log': {
+        '9': { fetchedAt: RECENT, filename: 'Nine.md' },
+        '7': { fetchedAt: RECENT, status: 'declined', vaultMarker: 'Work' },
+      },
+    });
+    const ledger = await openLedger(plugin, { clock });
+    ledger.release(claimsWork);
+    ledger.accept(9, 'Nine.md');
+
+    // Same reasoning as the cut-short fetch-new: the run stopped, the service
+    // did not, so 7 is still out there and stays in the ledger to be hunted.
+    await ledger.commit({ mode: 'fetch-all', cutShort: true });
+    expect(await storedLog(plugin)).toEqual({
+      '9': { fetchedAt: clock(), filename: 'Nine.md' },
+      '7': { fetchedAt: RECENT, status: 'declined', vaultMarker: 'Work' },
+    });
   });
 
   it('writes nothing on a fetch-new commit that decided nothing', async () => {

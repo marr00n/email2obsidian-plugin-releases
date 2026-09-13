@@ -35,7 +35,9 @@ import {
  *     appending them keeps the run contiguous and is written deliberately.
  *   - fetch-all, rate limited: a rewrite would replace the whole ledger with
  *     the handful of emails the run reached, discarding older accepted ids and
- *     tearing a hole in the middle of the run. Nothing is written at all.
+ *     tearing a hole in the middle of the run. So it appends instead, exactly
+ *     as fetch-new does — its accepted ids are a prefix too, and the notes it
+ *     wrote are on disk whether or not the run finished.
  *
  * A decline also records the Vault Marker the email arrived under, which is
  * what lets a later marker change release exactly the declines it now claims
@@ -246,10 +248,11 @@ class FetchLedger implements Ledger {
   }
 
   async commit({ mode, cutShort }: CommitOptions): Promise<void> {
-    if (mode === 'fetch-all') {
-      // A rewrite from a run that never finished would drop every id the run
-      // did not reach. Leave the ledger exactly as it was.
-      if (cutShort) return;
+    // A fetch-all that ran to the end has met every email the service still
+    // holds, so what it decided IS the ledger: rewriting drops the ids of
+    // email the service has since deleted, which is what keeps the log from
+    // growing for ever.
+    if (mode === 'fetch-all' && !cutShort) {
       await this.write(this.snapshot());
       return;
     }
@@ -262,9 +265,12 @@ class FetchLedger implements Ledger {
     // run releases and hunts them again.
     const missedAreGone = !cutShort;
 
-    // fetch-new appends. A cut-short run still writes: newest-first means the
-    // accepted ids are a contiguous prefix, and logging them is what stops the
-    // next run from fetching them again.
+    // Everything else appends, cut-short fetch-all included. It cannot rewrite
+    // — that would drop every id it never reached — but discarding the run
+    // instead threw away notes already on disk, and the next fetch wrote them
+    // all over again as `-1` duplicates. Both runs work newest-first, so what
+    // either accepted is a contiguous prefix of the newest email, and merging
+    // a prefix into a contiguous ledger leaves it contiguous.
     if (!this.pending.size && !(missedAreGone && this.released.size)) return;
 
     const base = { ...this.stored };

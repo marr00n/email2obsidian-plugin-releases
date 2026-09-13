@@ -42,7 +42,8 @@ export interface WriteEmailNoteResult {
  *
  * Reserves a note path, writes the note, saves the email's attachments and
  * inline images beside it, and hands back the path plus whatever went wrong
- * per file.
+ * per file. The path it settles on never names a file this plugin did not
+ * write — see `claimNotePath`.
  *
  * ## The note is created empty before any file is saved
  *
@@ -77,7 +78,7 @@ export async function writeEmailNote(
   // note as data URIs in the body and are saved by the inline saver below.
   const { inline, nonInline } = partitionByInline(detail.attachments);
 
-  const notePath = namer.reserve(detail.subject, detail.createdAt);
+  const notePath = await claimNotePath(vault, namer, detail);
 
   // Phase one: the empty note. See the ordering invariant above.
   await writeOrCreateNote(vault, notePath, '');
@@ -131,6 +132,73 @@ export async function writeEmailNote(
   report.debug(`writeOrCreateNote ${notePath || '(root)'} in ${Date.now() - writeStart}ms`);
 
   return { notePath, attachmentErrors };
+}
+
+/**
+ * The frontmatter property every note this plugin writes carries. A file that
+ * has it is one of ours and can be rewritten; a file that does not is the
+ * user's, whoever put it there.
+ */
+const OWN_NOTE_PROPERTY = 'email2obsidianID';
+
+/**
+ * How many names to try before giving up. Only a file the plugin did not
+ * write costs an attempt, so reaching this means the folder is genuinely full
+ * of foreign files under this subject — worth failing loudly over.
+ */
+const MAX_NAME_ATTEMPTS = 100;
+
+/**
+ * Take a note path the Note Namer hands out, and keep taking the next one
+ * until it names something safe to write.
+ *
+ * The namer scans the destination folder once, so between that scan and this
+ * write a file can appear at the path it believes is free — Obsidian Sync
+ * landing a note from another device, another plugin, the user. Writing there
+ * replaced that file's whole contents with an email, silently and with no
+ * undo. Each name is therefore checked against the vault as it is right now,
+ * and anything that is not this plugin's own note is treated as a collision
+ * like any other: the namer is asked again and answers `-1`, `-2`, and so on.
+ *
+ * Concurrent workers stay safe because `reserve` still hands out and records
+ * each candidate in one tick; the awaits here only decide whether to keep the
+ * name it gave or step past it, and a name stepped past stays reserved.
+ */
+async function claimNotePath(
+  vault: Vault,
+  namer: NoteNamer,
+  detail: EmailDetail
+): Promise<string> {
+  for (let attempt = 0; attempt < MAX_NAME_ATTEMPTS; attempt += 1) {
+    const candidate = namer.reserve(detail.subject, detail.createdAt);
+    const existing = vault.getAbstractFileByPath(candidate);
+    if (!(existing instanceof TFile)) return candidate;
+    if (await isOwnNote(vault, existing)) return candidate;
+  }
+  throw new Error(
+    `Could not find a free filename for email ${detail.id} after ${MAX_NAME_ATTEMPTS} tries.`
+  );
+}
+
+/**
+ * Is this file one the plugin may rewrite?
+ *
+ * Its own notes carry `email2obsidianID` in their frontmatter. An empty file
+ * counts too: that is what a run interrupted between creating the note and
+ * filling it leaves behind, and there is no content in it to lose.
+ */
+async function isOwnNote(vault: Vault, file: TFile): Promise<boolean> {
+  let contents: string;
+  try {
+    contents = await vault.read(file);
+  } catch {
+    // Unreadable is not provably ours, so treat it as the user's.
+    return false;
+  }
+  if (!contents.trim().length) return true;
+  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/.exec(contents);
+  if (!frontmatter) return false;
+  return new RegExp(`^${OWN_NOTE_PROPERTY}:`, 'm').test(frontmatter[1]);
 }
 
 function partitionByInline(attachments: AttachmentMeta[] | undefined): {

@@ -212,3 +212,80 @@ describe('writeEmailNote', () => {
     expect(text).not.toContain('![[Notes/doc.txt]]');
   });
 });
+
+describe('writeEmailNote and files it did not write', () => {
+  /**
+   * The Note Namer scans the folder once, when it is opened. Creating a file
+   * after that is the gap this guards: Obsidian Sync landing a note from
+   * another device, another plugin, the user typing.
+   */
+  async function contextWithLateFile(
+    path: string,
+    contents: string
+  ): Promise<{ ctx: WriteEmailNoteContext; vault: Vault }> {
+    const made = await makeContext();
+    await made.vault.create(path, contents);
+    return made;
+  }
+
+  it('takes the next name rather than replacing a note it did not write', async () => {
+    const { ctx, vault } = await contextWithLateFile(
+      'Notes/Hello.md',
+      '# My own note\n\nWork I would rather keep.'
+    );
+
+    const result = await writeEmailNote(ctx, email());
+
+    expect(result.notePath).toBe('Notes/Hello-1.md');
+    expect(noteText(vault, 'Notes/Hello.md')).toBe(
+      '# My own note\n\nWork I would rather keep.'
+    );
+    expect(noteText(vault, 'Notes/Hello-1.md')).toContain('email2obsidianID: 1');
+  });
+
+  it('keeps stepping past several foreign files', async () => {
+    const { ctx, vault } = await contextWithLateFile('Notes/Hello.md', 'Mine');
+    await vault.create('Notes/Hello-1.md', 'Also mine');
+
+    const result = await writeEmailNote(ctx, email());
+
+    expect(result.notePath).toBe('Notes/Hello-2.md');
+    expect(noteText(vault, 'Notes/Hello.md')).toBe('Mine');
+    expect(noteText(vault, 'Notes/Hello-1.md')).toBe('Also mine');
+  });
+
+  it('does rewrite a note this plugin wrote, so a re-fetch does not pile up copies', async () => {
+    const { ctx, vault } = await contextWithLateFile(
+      'Notes/Hello.md',
+      ['---', 'title: "Hello"', 'email2obsidianID: 1', '---', '', 'Older body'].join('\n')
+    );
+
+    const result = await writeEmailNote(ctx, email({ markdownBody: 'Newer body' }));
+
+    expect(result.notePath).toBe('Notes/Hello.md');
+    expect(noteText(vault, 'Notes/Hello.md')).toContain('Newer body');
+  });
+
+  it('claims an empty file, which is all an interrupted run of its own leaves', async () => {
+    // Phase one writes the note empty and phase two fills it. A crash between
+    // the two leaves nothing to lose, so the name stays usable.
+    const { ctx, vault } = await contextWithLateFile('Notes/Hello.md', '');
+
+    const result = await writeEmailNote(ctx, email());
+
+    expect(result.notePath).toBe('Notes/Hello.md');
+    expect(noteText(vault, 'Notes/Hello.md')).toContain('email2obsidianID: 1');
+  });
+
+  it('does not mistake a body mentioning the property for frontmatter', async () => {
+    const { ctx, vault } = await contextWithLateFile(
+      'Notes/Hello.md',
+      'Notes on the plugin: it writes email2obsidianID: 42 into frontmatter.'
+    );
+
+    const result = await writeEmailNote(ctx, email());
+
+    expect(result.notePath).toBe('Notes/Hello-1.md');
+    expect(noteText(vault, 'Notes/Hello.md')).toContain('Notes on the plugin');
+  });
+});
