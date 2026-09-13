@@ -139,7 +139,7 @@ export async function runSync(opts: SyncOptions): Promise<SyncResult> {
       claimed.push(summary);
       continue;
     }
-    ledger.decline(summary.id, summary.vaultMarker);
+    ledger.decline(summary.id, summary.vaultMarker, summary.createdAt);
     declinedMarkers.push(summary.vaultMarker);
   }
 

@@ -159,7 +159,22 @@ export default class Email2ObsidianPlugin extends Plugin {
   async updateSettings(partial: Partial<Email2ObsidianSettings>): Promise<void> {
     const prevPeriodic = this.settings.periodicSync;
     const prevApiKey = this.settings.apiKey;
-    this.settings = normalizeSettings({ ...this.settings, ...partial });
+    const prevNotesFolder = this.settings.notesFolder;
+    this.settings = normalizeSettings(
+      { ...this.settings, ...partial },
+      {
+        // A folder that cannot be made into a path used to reset the setting
+        // to the shipped default without saying so, so the next fetch quietly
+        // filed the user's email somewhere else entirely.
+        fallbackFolder: prevNotesFolder,
+        onRejectedFolder: (typed) => {
+          this.report.notice(
+            `"${typed}" can't be used as a folder name, so notes are still going to ` +
+              `${prevNotesFolder.length ? prevNotesFolder : 'the vault root'}.`
+          );
+        },
+      }
+    );
     this.report = this.makeReport(this.settings.debugLogging);
     if (this.settings.apiKey !== prevApiKey) {
       this.client = this.makeClient(this.settings.apiKey);
@@ -433,8 +448,21 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
       .addText((text) => {
         text.setPlaceholder('(blank for root)');
         text.setValue(this.plugin.settings.notesFolder);
-        this.debounceText(text.inputEl, (value) =>
-          this.plugin.updateSettings({ notesFolder: value })
+        this.debounceText(
+          text.inputEl,
+          (value) => this.plugin.updateSettings({ notesFolder: value }),
+          {
+            // What was typed and what was stored can differ — `Inbox//Mail`
+            // is kept as `Inbox/Mail`, and a name that cannot be used at all
+            // leaves the previous folder in place. Show the stored value once
+            // the user leaves the field, rather than a value that is not what
+            // the plugin will actually use.
+            // A block body, not an expression: Obsidian's components carry a
+            // `then`, so returning one reads as a misused promise.
+            onBlur: () => {
+              text.setValue(this.plugin.settings.notesFolder);
+            },
+          }
         );
       });
 
@@ -685,7 +713,8 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
    */
   private debounceText(
     inputEl: HTMLInputElement,
-    save: (value: string) => Promise<void>
+    save: (value: string) => Promise<void>,
+    options: { onBlur?: () => void } = {}
   ): void {
     const saver = new DebouncedSave(TEXT_SAVE_DELAY_MS, save);
     this.textSaves.push(saver);
@@ -693,7 +722,8 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
       saver.schedule(inputEl.value);
     });
     inputEl.addEventListener('blur', () => {
-      void saver.flush();
+      // After the save, not before: `onBlur` is for showing what was stored.
+      void saver.flush().then(() => options.onBlur?.());
     });
   }
 
@@ -822,7 +852,23 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
   }
 }
 
-function normalizeSettings(raw: unknown): Email2ObsidianSettings {
+export interface NormalizeSettingsOptions {
+  /**
+   * What the notes folder falls back to when what was typed cannot be made
+   * into a path. Defaults to the shipped folder, which is right for a first
+   * load; the settings panel passes the folder already in use, so a typo
+   * leaves the user's own folder alone rather than silently moving their
+   * email somewhere else.
+   */
+  fallbackFolder?: string;
+  /** Told what was rejected, so the user can be told too. */
+  onRejectedFolder?: (typed: string) => void;
+}
+
+function normalizeSettings(
+  raw: unknown,
+  options: NormalizeSettingsOptions = {}
+): Email2ObsidianSettings {
   const candidate =
     raw && typeof raw === 'object'
       ? (raw as Partial<Email2ObsidianSettings>)
@@ -832,9 +878,14 @@ function normalizeSettings(raw: unknown): Email2ObsidianSettings {
   const notesFolder = normalizeFolder(merged.notesFolder, { allowRoot: true });
   const syncInterval = normalizeSyncInterval(merged.syncInterval);
 
+  if (notesFolder === null && typeof merged.notesFolder === 'string') {
+    options.onRejectedFolder?.(merged.notesFolder);
+  }
+
   return {
     apiKey: typeof merged.apiKey === 'string' ? merged.apiKey.trim() : '',
-    notesFolder: notesFolder ?? DEFAULT_SETTINGS.notesFolder,
+    notesFolder:
+      notesFolder ?? options.fallbackFolder ?? DEFAULT_SETTINGS.notesFolder,
     periodicSync: Boolean(merged.periodicSync),
     syncInterval,
     runOnOpen: Boolean(merged.runOnOpen),

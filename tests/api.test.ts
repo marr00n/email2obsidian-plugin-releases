@@ -404,10 +404,136 @@ describe('createE2oClient / default Obsidian transport', () => {
     await client.listEmails({ sort: 'date-desc' });
 
     expect(requestUrlMock).toHaveBeenCalledWith({
-      url: 'https://email2obsidian.com/api/emails?sort=date-desc',
+      url: 'https://email2obsidian.com/api/emails?limit=100&sort=date-desc',
       method: 'GET',
       headers: { 'x-api-key': API_KEY },
       throw: false,
     });
+  });
+});
+
+describe('createE2oClient / paging and retries', () => {
+  const okPage = () => jsonResponse(200, { emails: [], hasMore: false });
+
+  it('asks for the largest page the service allows', async () => {
+    const urls: string[] = [];
+    const http = vi.fn(async (request: { url: string }) => {
+      urls.push(request.url);
+      return okPage();
+    });
+
+    // Six times fewer round trips over a full fetch than the service's
+    // default of 10, and six times fewer chances to be rate limited.
+    await createE2oClient({ apiKey: API_KEY, http }).listEmails();
+
+    expect(new URL(urls[0]).searchParams.get('limit')).toBe('100');
+  });
+
+  it('lets a caller ask for a different page size', async () => {
+    const urls: string[] = [];
+    const http = vi.fn(async (request: { url: string }) => {
+      urls.push(request.url);
+      return okPage();
+    });
+
+    await createE2oClient({ apiKey: API_KEY, http }).listEmails({ limit: 5 });
+
+    expect(new URL(urls[0]).searchParams.get('limit')).toBe('5');
+  });
+
+  it.each([
+    ['a rate limit', 429],
+    ['a server error', 503],
+  ])('retries once after %s and returns the second answer', async (_label, status) => {
+    const waits: number[] = [];
+    const http = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(status, { message: 'busy' }))
+      .mockResolvedValueOnce(jsonResponse(200, { emails: [], hasMore: false }));
+
+    const result = await createE2oClient({
+      apiKey: API_KEY,
+      http,
+      warn: () => {},
+      sleep: async (ms) => {
+        waits.push(ms);
+      },
+    }).listEmails();
+
+    expect(http).toHaveBeenCalledTimes(2);
+    expect(waits).toEqual([1000]);
+    expect(result.emails).toEqual([]);
+  });
+
+  it('waits as long as the service asks, when it asks for something short', async () => {
+    const waits: number[] = [];
+    const http = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(429, { message: 'busy' }, { 'Retry-After': '2' })
+      )
+      .mockResolvedValueOnce(jsonResponse(200, { emails: [], hasMore: false }));
+
+    await createE2oClient({
+      apiKey: API_KEY,
+      http,
+      warn: () => {},
+      sleep: async (ms) => {
+        waits.push(ms);
+      },
+    }).listEmails();
+
+    expect(waits).toEqual([2000]);
+  });
+
+  it('does not sit out a long Retry-After; it reports the rate limit instead', async () => {
+    const waits: number[] = [];
+    const http = vi.fn(async () =>
+      jsonResponse(429, { message: 'busy' }, { 'Retry-After': '600' })
+    );
+
+    const error = await createE2oClient({
+      apiKey: API_KEY,
+      http,
+      warn: () => {},
+      sleep: async (ms) => {
+        waits.push(ms);
+      },
+    })
+      .listEmails()
+      .catch((e) => e);
+
+    expect(waits).toEqual([]);
+    expect(http).toHaveBeenCalledTimes(1);
+    expect((error as ApiError).code).toBe('rate-limited');
+  });
+
+  it('retries a dropped connection once, then gives up', async () => {
+    const http = vi.fn(async () => {
+      throw new Error('net::ERR_CONNECTION_RESET');
+    });
+
+    const error = await createE2oClient({
+      apiKey: API_KEY,
+      http,
+      warn: () => {},
+      sleep: async () => {},
+    })
+      .listEmails()
+      .catch((e) => e);
+
+    expect(http).toHaveBeenCalledTimes(2);
+    expect((error as ApiError).code).toBe('network');
+  });
+
+  it('does not retry a failure that would fail the same way again', async () => {
+    const http = vi.fn(async () => jsonResponse(401, { message: 'nope' }));
+
+    const error = await createE2oClient({ apiKey: API_KEY, http, warn: () => {} })
+      .listEmails()
+      .catch((e) => e);
+
+    expect(http).toHaveBeenCalledTimes(1);
+    expect((error as ApiError).code).toBe('unauthorized');
   });
 });

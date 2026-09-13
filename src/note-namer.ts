@@ -60,7 +60,7 @@ export async function openNoteNames(
 
   return {
     reserve(subject: string, createdAt: string): string {
-      const base = sanitizeFilename(subject || createdAt || 'email');
+      const base = baseNameFor(subject, createdAt);
       let candidate = withinByteLimit(base, 0);
       let suffix = 1;
 
@@ -159,6 +159,19 @@ function scanFileNames(
   return names;
 }
 
+/**
+ * The subject, or the date it arrived, or the word `email`.
+ *
+ * Each candidate is tested after sanitising, not before. A subject of `???`
+ * is not empty, but nothing survives sanitising it, and testing the raw text
+ * sent such an email to the literal name `email` rather than to the date this
+ * has always promised.
+ */
+function baseNameFor(subject: string, createdAt: string): string {
+  return sanitizeFilename(subject) || sanitizeFilename(createdAt) || 'email';
+}
+
+/** The cleaned name, or `''` when nothing of it survives. */
 function sanitizeFilename(input: string): string {
   const cleaned = input
     .replace(/[\\/*?"<>|]+/g, ' ')
@@ -168,6 +181,6 @@ function sanitizeFilename(input: string): string {
     // Windows refuses a name ending in a dot; the trim above took the spaces.
     .replace(/\.+$/, '')
     .trim();
-  if (!cleaned.length) return 'email';
+  if (!cleaned.length) return '';
   return WINDOWS_RESERVED.test(cleaned) ? `${cleaned}-note` : cleaned;
 }

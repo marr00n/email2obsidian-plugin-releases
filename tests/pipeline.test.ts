@@ -10,6 +10,17 @@ function bytes(values: number[]): ArrayBuffer {
   return new Uint8Array(values).buffer;
 }
 
+/**
+ * The wire timestamp the pretend server stamps on everything. Recent on
+ * purpose: the real service deletes an email after 72 hours, so nothing older
+ * is ever in the stream, and the ledger's retention rules read this date.
+ */
+function recentWireTimestamp(): string {
+  return new Date(Date.now() - 60 * 60 * 1000).toISOString().slice(0, 19);
+}
+
+const WIRE_NOW = recentWireTimestamp();
+
 function noteText(vault: Vault, path: string): string {
   const file = vault.getAbstractFileByPath(path);
   expect(file).toBeInstanceOf(TFile);
@@ -59,7 +70,7 @@ function fakeServer(pages: WireEmail[][]): FakeServer {
             fileName: `doc-${email.id}.txt`,
             fileSize: 1,
             mimeType: 'text/plain',
-            createdAt: '2021-01-01 00:00:00',
+            createdAt: WIRE_NOW,
             contentDisposition: 'attachment',
           },
         ]
@@ -78,7 +89,7 @@ function fakeServer(pages: WireEmail[][]): FakeServer {
           emails: page.map((email) => ({
             id: email.id,
             subject: email.subject,
-            createdAt: '2021-01-01 00:00:00',
+            createdAt: WIRE_NOW,
             hashtags: [],
             vault: email.vault ?? null,
           })),
@@ -97,7 +108,7 @@ function fakeServer(pages: WireEmail[][]): FakeServer {
         return jsonResponse(200, {
           id: email.id,
           subject: email.subject,
-          createdAt: '2021-01-01 00:00:00',
+          createdAt: WIRE_NOW,
           hashtags: [],
           vault: email.vault ?? null,
           markdownBody: `Body of ${email.subject}.`,
@@ -941,5 +952,31 @@ describe('runSync when the plugin is unloading', () => {
     // What it did write is logged, so a later run does not import it twice.
     const stored = (await plugin.loadData()) as { 'fetch-log'?: Record<string, unknown> };
     expect(Object.keys(stored['fetch-log'] ?? {})).toHaveLength(result.synced);
+  });
+});
+
+describe('Vault Markers written two ways', () => {
+  it('claims an email whose marker is spelled with a different Unicode accent', async () => {
+    const vault = new Vault();
+    const plugin = new Plugin(new App(vault));
+    // The service returns the marker precomposed; the user typed it with a
+    // combining accent, or the other way round, depending on the device.
+    const server = fakeServer([[{ id: 1, subject: 'Une note', vault: 'Caf\u00e9' }]]);
+
+    const result = await runSync({
+      mode: 'fetch-new',
+      settings: {
+        apiKey: 'k',
+        notesFolder: 'Notes',
+        vaultMarkers: ['Cafe\u0301'],
+        receiveUnmarked: false,
+      },
+      vault,
+      plugin,
+      client: createE2oClient({ apiKey: 'k', http: server.http }),
+    });
+
+    expect(result.synced).toBe(1);
+    expect(result.declined).toBe(0);
   });
 });

@@ -81,10 +81,19 @@ describe('openNoteNames', () => {
     expect(namer.reserve('', '')).toBe('Notes/email.md');
   });
 
-  it("falls back to 'email' when the subject sanitises down to nothing", async () => {
+  it('falls back to the date when the subject sanitises down to nothing', async () => {
     const { namer } = await namerOver('Notes');
 
-    expect(namer.reserve('///', CREATED)).toBe('Notes/email.md');
+    // `///` and `???` are not empty, so testing the raw subject sent these to
+    // the literal name `email` instead of to the date.
+    expect(namer.reserve('///', CREATED)).toBe('Notes/2021-01-01T00-00-00.md');
+    expect(namer.reserve('???', CREATED)).toBe('Notes/2021-01-01T00-00-00-1.md');
+  });
+
+  it("falls back to 'email' only when the date is no use either", async () => {
+    const { namer } = await namerOver('Notes');
+
+    expect(namer.reserve('???', '')).toBe('Notes/email.md');
   });
 
   describe('sanitisation', () => {

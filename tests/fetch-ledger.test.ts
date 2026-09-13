@@ -445,3 +445,134 @@ describe('fetch ledger', () => {
     expect(warnings).toEqual([['Failed to load fetch ledger via plugin data: disk exploded']]);
   });
 });
+
+describe('fetch ledger housekeeping', () => {
+  it('skips one unusable entry instead of throwing the whole ledger away', async () => {
+    const plugin = newPlugin();
+    await plugin.saveData({
+      'fetch-log': {
+        '9': { fetchedAt: RECENT, filename: 'Nine.md' },
+        // A hand edit, or a write that was interrupted.
+        '8': null,
+        '7': 'not an entry either',
+        '6': { fetchedAt: RECENT, filename: 'Six.md' },
+      },
+    });
+
+    const ledger = await openLedger(plugin, { clock });
+
+    // Before this, reading `8.fetchedAt` threw, the catch swallowed it, and
+    // the plugin started from nothing — re-importing everything the service
+    // still held.
+    expect(ledger.hasSeen(9)).toBe(true);
+    expect(ledger.hasSeen(6)).toBe(true);
+    expect(ledger.hasSeen(8)).toBe(false);
+  });
+
+  it('counts what a release call put back, not the running total', async () => {
+    const plugin = newPlugin();
+    await plugin.saveData({
+      'fetch-log': {
+        '9': { fetchedAt: RECENT, createdAt: RECENT, status: 'declined', vaultMarker: 'Work' },
+        '8': { fetchedAt: RECENT, createdAt: RECENT, status: 'declined', vaultMarker: 'Art' },
+      },
+    });
+    const ledger = await openLedger(plugin, { clock });
+
+    expect(ledger.release(claimsWork)).toBe(1);
+    // Called again with the same policy there is nothing new to put back, and
+    // saying "1" again would have the settings panel report work twice.
+    expect(ledger.release(claimsWork)).toBe(0);
+    expect(
+      ledger.release(createReceivePolicy({ markers: ['Work', 'Art'], unmarked: false }))
+    ).toBe(1);
+  });
+
+  it('ages a held-back email from when it arrived, not from when it was declined', async () => {
+    const plugin = newPlugin();
+    await plugin.saveData({
+      'fetch-log': {
+        // Declined a moment ago, but the email itself is long gone from the
+        // service — a fetch-all can meet mail far older than this run.
+        '9': { fetchedAt: RECENT, createdAt: EXPIRED, status: 'declined', vaultMarker: 'Work' },
+        '8': { fetchedAt: RECENT, createdAt: RECENT, status: 'declined', vaultMarker: 'Work' },
+      },
+    });
+    const ledger = await openLedger(plugin, { clock });
+
+    // Only the one the service can still be holding is promised to the user.
+    expect(ledger.pendingRelease(claimsWork).total).toBe(1);
+    expect(ledger.release(claimsWork)).toBe(1);
+    expect(ledger.hasSeen(8)).toBe(false);
+    expect(ledger.hasSeen(9)).toBe(true);
+  });
+
+  it('falls back to the decline time for an entry written before arrival times were kept', async () => {
+    const plugin = newPlugin();
+    await plugin.saveData({
+      'fetch-log': {
+        '9': { fetchedAt: RECENT, status: 'declined', vaultMarker: 'Work' },
+      },
+    });
+    const ledger = await openLedger(plugin, { clock });
+
+    expect(ledger.pendingRelease(claimsWork).total).toBe(1);
+  });
+
+  it('drops declines the service can no longer be holding when it saves', async () => {
+    const plugin = newPlugin();
+    await plugin.saveData({
+      'fetch-log': {
+        '9': { fetchedAt: RECENT, filename: 'Nine.md' },
+        '8': { fetchedAt: EXPIRED, createdAt: EXPIRED, status: 'declined', vaultMarker: 'Art' },
+        '7': { fetchedAt: EXPIRED, filename: 'Seven.md' },
+      },
+    });
+    const ledger = await openLedger(plugin, { clock });
+
+    ledger.accept(10, 'Ten.md');
+    await ledger.commit({ mode: 'fetch-new', cutShort: false });
+
+    const log = await storedLog(plugin);
+    // The stale decline goes; nothing can release it and nothing can fetch
+    // it, so keeping it only grows data.json for ever.
+    expect(log).not.toHaveProperty('8');
+    // Accepted entries stay however old: they are what stops an email being
+    // imported a second time.
+    expect(log).toHaveProperty('7');
+    expect(log).toHaveProperty('9');
+    expect(log).toHaveProperty('10');
+  });
+
+  it('keeps a decline whose recorded dates disagree, rather than risking the hole', async () => {
+    const plugin = newPlugin();
+    await plugin.saveData({
+      'fetch-log': {
+        // Old email, declined just now: the service may well still hold it,
+        // and dropping it would tear a hole in the contiguous run.
+        '9': { fetchedAt: RECENT, createdAt: EXPIRED, status: 'declined', vaultMarker: 'Art' },
+      },
+    });
+    const ledger = await openLedger(plugin, { clock });
+
+    ledger.accept(10, 'Ten.md');
+    await ledger.commit({ mode: 'fetch-new', cutShort: false });
+
+    expect(await storedLog(plugin)).toHaveProperty('9');
+  });
+
+  it('treats a decline with no readable date as gone', async () => {
+    const plugin = newPlugin();
+    await plugin.saveData({
+      'fetch-log': {
+        '9': { fetchedAt: 'whenever', status: 'declined', vaultMarker: 'Work' },
+      },
+    });
+    const ledger = await openLedger(plugin, { clock });
+
+    // Read as still valid it would be released, hunted and never found, on
+    // every run from now on.
+    expect(ledger.pendingRelease(claimsWork).total).toBe(0);
+    expect(ledger.release(claimsWork)).toBe(0);
+  });
+});

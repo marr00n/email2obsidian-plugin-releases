@@ -69,12 +69,29 @@ import {
  */
 export const RETENTION_MS = 72 * 60 * 60 * 1000;
 
+/**
+ * The widest UTC offset anywhere, allowed for on top of the retention window.
+ *
+ * An email's `createdAt` arrives with no zone (`docs/server-api-contract.md`)
+ * so it reads as local time, and a device far enough east would otherwise
+ * read a still-live email as expired and never release it. Being a few hours
+ * generous costs at worst a held-back count that is slightly optimistic;
+ * being strict costs the user the email.
+ */
+const CLOCK_SKEW_MARGIN_MS = 14 * 60 * 60 * 1000;
+
 /** The two disciplines a run commits under. */
 export type SyncMode = 'fetch-new' | 'fetch-all';
 
 export interface LedgerEntry {
   fetchedAt: string;
   filename?: string;
+  /**
+   * On a decline, when the email itself arrived at the service — which is
+   * what its 72 hours are counted from. Absent on a decline written before
+   * this was recorded, and on every accepted entry.
+   */
+  createdAt?: string;
   /** Absent — the shape every pre-decline log has — means accepted. */
   status?: 'declined';
   /**
@@ -115,9 +132,10 @@ export interface Ledger {
   accept(id: number, filename: string): void;
   /**
    * The receive policy turned this email down (ADR-0002), under the Vault
-   * Marker it arrived with — `null` for an Unmarked Email.
+   * Marker it arrived with — `null` for an Unmarked Email — and with the
+   * email's own arrival time, which is what its retention is counted from.
    */
-  decline(id: number, vaultMarker: string | null): void;
+  decline(id: number, vaultMarker: string | null, createdAt?: string): void;
   /**
    * Put back into play every decline this policy now claims and the service
    * could still hold, so this run imports them. Returns how many.
@@ -200,20 +218,26 @@ class FetchLedger implements Ledger {
     this.pending.set(String(id), { fetchedAt: this.clock(), filename });
   }
 
-  decline(id: number, vaultMarker: string | null): void {
+  decline(id: number, vaultMarker: string | null, createdAt?: string): void {
     this.pending.set(String(id), {
       fetchedAt: this.clock(),
       status: 'declined',
       vaultMarker: isUnmarked(vaultMarker) ? UNMARKED_KEY : vaultMarker,
+      ...(createdAt ? { createdAt } : {}),
     });
   }
 
   release(policy: ReceivePolicy): number {
+    let freed = 0;
     for (const [key] of this.releasable(policy)) {
+      // Counted per call, not as the running total: a second call with a
+      // narrower policy releases nothing and must say so, rather than
+      // reporting everything the first call had already put back.
+      if (!this.released.has(key)) freed += 1;
       this.released.add(key);
       this.outstanding.add(key);
     }
-    return this.released.size;
+    return freed;
   }
 
   pendingRelease(policy: ReceivePolicy): PendingRelease {
@@ -231,11 +255,11 @@ class FetchLedger implements Ledger {
    * their most recent email actually carried.
    */
   private releasable(policy: ReceivePolicy): [string, LedgerEntry][] {
-    const cutoff = Date.parse(this.clock()) - RETENTION_MS;
+    const now = Date.parse(this.clock());
     return Object.entries(this.stored)
       .filter(([, entry]) => {
         if (entry.status !== 'declined') return false;
-        if (Date.parse(entry.fetchedAt) < cutoff) return false;
+        if (isExpired(entry, now)) return false;
         return entry.vaultMarker === undefined || policy.claims(entry.vaultMarker);
       })
       .sort(([a], [b]) => Number(b) - Number(a));
@@ -291,18 +315,82 @@ class FetchLedger implements Ledger {
   }
 
   private async write(log: LedgerData): Promise<void> {
+    const pruned = withoutExpiredDeclines(log, Date.parse(this.clock()));
     // Through the store, so the envelope this merges into is the one on disk
     // at the moment of the save — a settings save that lands mid-flight can
     // no longer carry away the log written here.
     await pluginDataStore(this.plugin).update((envelope) => ({
       ...envelope,
-      [FETCH_LOG_KEY]: log,
+      [FETCH_LOG_KEY]: pruned,
     }));
-    this.stored = log;
+    this.stored = pruned;
     this.pending = new Map();
     this.released = new Set();
     this.outstanding = new Set();
   }
+}
+
+/**
+ * Has the service already deleted this email?
+ *
+ * Counted from the email's own arrival time where the entry records one. A
+ * decline used to be aged from the moment this install turned it down, which
+ * on a fetch-all of old mail could be days after the email arrived — long
+ * enough for settings to promise the user emails the service had already
+ * deleted. An entry written before `createdAt` was recorded falls back to
+ * that older reading, which is the best it can do.
+ *
+ * Neither stamp parsing counts as expired: it cannot be reasoned about, and
+ * the alternative is an entry kept and re-hunted for ever.
+ *
+ * The window is widened by `CLOCK_SKEW_MARGIN_MS`, because `createdAt` has no
+ * zone and reads as local time. Erring late is the cheap direction here.
+ */
+function isExpired(entry: LedgerEntry, now: number): boolean {
+  const stamp = firstParsable(entry.createdAt, entry.fetchedAt);
+  if (stamp === null) return true;
+  return stamp < now - RETENTION_MS - CLOCK_SKEW_MARGIN_MS;
+}
+
+/** The first of these that is a date at all, or `null` if neither is. */
+function firstParsable(...stamps: (string | undefined)[]): number | null {
+  for (const stamp of stamps) {
+    const parsed = Date.parse(stamp ?? '');
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return null;
+}
+
+/**
+ * Declines the service can no longer be holding are dropped on every save.
+ * Nothing can release them and nothing can fetch them, so keeping them only
+ * grows `data.json` for ever. Accepted entries stay: they are what stops an
+ * email being imported twice, and the contiguous run is built out of them.
+ *
+ * Deliberately more cautious than `isExpired`, because the two answers carry
+ * opposite risks. Getting `isExpired` wrong tells the user about email that
+ * is no longer there — so it takes the strict reading. Getting this wrong
+ * deletes a decline the service still holds, tearing a hole in the contiguous
+ * run, so an entry has to be past the window on *both* readings before it
+ * goes: the email's own arrival time and the moment this install declined it.
+ */
+function withoutExpiredDeclines(log: LedgerData, now: number): LedgerData {
+  const cutoff = now - RETENTION_MS;
+  const kept: LedgerData = {};
+  for (const [key, entry] of Object.entries(log)) {
+    if (entry.status === 'declined') {
+      const newest = Math.max(parseOrOld(entry.createdAt), parseOrOld(entry.fetchedAt));
+      if (newest < cutoff - CLOCK_SKEW_MARGIN_MS) continue;
+    }
+    kept[key] = entry;
+  }
+  return kept;
+}
+
+/** A stamp that will not parse cannot argue for keeping anything. */
+function parseOrOld(stamp: string | undefined): number {
+  const parsed = Date.parse(stamp ?? '');
+  return Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
 }
 
 async function loadLedger(
@@ -318,6 +406,10 @@ async function loadLedger(
     const parsed = stored as Record<string, unknown>;
     const log: LedgerData = {};
     for (const [key, value] of Object.entries(parsed)) {
+      // One unusable entry — `null` from a hand edit or a corrupted write —
+      // used to throw here, and the catch below threw the whole ledger away
+      // with it, re-importing everything the service still held. Skip it.
+      if (!value || typeof value !== 'object') continue;
       const entry = value as Record<string, unknown>;
       if (typeof entry.fetchedAt !== 'string') continue;
       const filename =
@@ -335,6 +427,11 @@ async function loadLedger(
               // being recorded, which `releasable` reads as "cannot rule out".
               ...(typeof entry.vaultMarker === 'string'
                 ? { vaultMarker: entry.vaultMarker }
+                : {}),
+              // Same for the email's own arrival time: absent on a decline
+              // written before it was recorded, and `isExpired` falls back.
+              ...(typeof entry.createdAt === 'string'
+                ? { createdAt: entry.createdAt }
                 : {}),
             }
           : { fetchedAt: entry.fetchedAt, filename };

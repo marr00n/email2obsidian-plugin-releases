@@ -219,14 +219,42 @@ function buildAttachmentSection(
   const lines = ['## Email Attachments', ''];
   for (const att of attachments) {
     const savedPath = savedPaths?.[att.id];
-    if (savedPath) {
-      lines.push(`- [${att.fileName}](${normalizeLinkPath(savedPath)})`);
-      continue;
-    }
-    const linkPath = buildAttachmentLink(fallbackFolder, att.fileName);
-    lines.push(`- [${att.fileName}](${linkPath})`);
+    const linkPath = savedPath
+      ? normalizeLinkPath(savedPath)
+      : buildAttachmentLink(fallbackFolder, att.fileName);
+    lines.push(`- [${escapeLinkText(att.fileName)}](${escapeLinkTarget(linkPath)})`);
   }
   return lines.join('\n');
+}
+
+/**
+ * A markdown link target, with the brackets that would end it early made
+ * safe.
+ *
+ * Markdown closes `(...)` on the first unmatched `)`, so an attachment named
+ * `report).pdf` cut its own link short and left the rest of the path as plain
+ * text on the page. Balanced pairs — `Invoice (final).pdf` — parse correctly
+ * and are left alone, so ordinary filenames read as they always have; only
+ * the brackets that would break the link are encoded.
+ */
+function escapeLinkTarget(path: string): string {
+  return isBracketBalanced(path)
+    ? path
+    : path.replace(/\(/g, '%28').replace(/\)/g, '%29');
+}
+
+/** The visible half of the link: `[` and `]` would end it early too. */
+function escapeLinkText(text: string): string {
+  return text.replace(/([[\]])/g, '\\$1');
+}
+
+function isBracketBalanced(text: string): boolean {
+  let depth = 0;
+  for (const char of text) {
+    if (char === '(') depth += 1;
+    else if (char === ')' && --depth < 0) return false;
+  }
+  return depth === 0;
 }
 
 function buildAttachmentLink(folder: string, filename: string): string {

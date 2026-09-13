@@ -1,9 +1,33 @@
+/* global setTimeout */
 import { requestUrl } from 'obsidian';
 import { prefixedWarn } from './sync-report';
 
 export const EMAIL2OBSIDIAN_API_BASE = 'https://email2obsidian.com/';
 
 export type SortOrder = 'date-desc' | 'date-asc';
+
+/**
+ * Emails per page. The service defaults to 10 and clamps at 100, so asking
+ * for the maximum is six times fewer round trips on a full fetch — and six
+ * times fewer chances to be rate limited part way through one.
+ */
+const PAGE_LIMIT = 100;
+
+/**
+ * One retry, after a pause, for the failures that are the service being busy
+ * rather than the request being wrong. Anything else — a bad key, a missing
+ * email — will fail exactly the same way a second time.
+ */
+const RETRY_PAUSE_MS = 1000;
+
+/**
+ * The longest `Retry-After` this will actually sit out. Past it the service
+ * is not asking for a pause, it is asking the user to come back later, and
+ * the run says so instead of blocking on it.
+ */
+const MAX_RETRY_AFTER_MS = 10_000;
+
+export type Sleep = (ms: number) => Promise<void>;
 
 /* -------------------------------------------------------------------------
  * Transport
@@ -66,6 +90,11 @@ export interface EmailDetail extends EmailSummary {
 
 export interface EmailListRequest {
   cursor?: string;
+  /**
+   * Emails per page. Defaults to `PAGE_LIMIT`; the service clamps it to
+   * 1–100 (`docs/server-api-contract.md`).
+   */
+  limit?: number;
   sort?: SortOrder;
   tag?: string;
   search?: string;
@@ -138,24 +167,28 @@ export interface E2oClientOptions {
    * still logs exactly as it always has.
    */
   warn?: (msg: string) => void;
+  /** How the retry pause is taken. Injectable so tests need not really wait. */
+  sleep?: Sleep;
 }
 
 export function createE2oClient({
   apiKey,
   http = obsidianHttp,
   warn = defaultWarn,
+  sleep = defaultSleep,
 }: E2oClientOptions): E2oClient {
   async function listEmails(
     params: EmailListRequest = {}
   ): Promise<EmailListResponse> {
     const url = new URL('api/emails', EMAIL2OBSIDIAN_API_BASE);
+    url.searchParams.set('limit', String(params.limit ?? PAGE_LIMIT));
     if (params.cursor) url.searchParams.set('cursor', params.cursor);
     if (params.sort) url.searchParams.set('sort', params.sort);
     if (params.tag) url.searchParams.set('tag', params.tag);
     if (params.search) url.searchParams.set('search', params.search);
 
     const context = 'GET /api/emails';
-    const response = await safeFetch(http, url.toString(), apiKey, context, warn);
+    const response = await safeFetch(http, url.toString(), apiKey, context, warn, sleep);
     const data = parseJson(response, context, warn);
 
     if (!isEmailListPayload(data)) {
@@ -168,7 +201,7 @@ export function createE2oClient({
   async function getEmail(id: number): Promise<EmailDetail> {
     const url = new URL(`api/emails/${id}`, EMAIL2OBSIDIAN_API_BASE);
     const context = 'GET /api/emails/:id';
-    const response = await safeFetch(http, url.toString(), apiKey, context, warn);
+    const response = await safeFetch(http, url.toString(), apiKey, context, warn, sleep);
     const data = parseJson(response, context, warn);
 
     if (!isEmailDetailPayload(data)) {
@@ -188,7 +221,8 @@ export function createE2oClient({
       url.toString(),
       apiKey,
       'GET /api/attachments/:id/download',
-      warn
+      warn,
+      sleep
     );
 
     const disposition = getHeader(response.headers, 'content-disposition');
@@ -236,26 +270,52 @@ const defaultWarn = prefixedWarn;
 const obsidianHttp: HttpAdapter = (request) =>
   requestUrl({ ...request, throw: false });
 
+const defaultSleep: Sleep = (ms) =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * One request, with one retry for the failures worth retrying.
+ *
+ * A rate limit, a 5xx and a dropped connection are all the service or the
+ * network being momentarily unavailable, and a single hiccup used to abort
+ * the whole run. Every other failure — a bad key, a missing email, a reply
+ * that will not parse — fails identically the second time, so it is not
+ * retried. When the service says how long to wait, that is what is waited;
+ * `docs/server-api-contract.md` documents the header on a 429.
+ */
 async function safeFetch(
   http: HttpAdapter,
   url: string,
   apiKey: string,
   context: string,
-  warn: (msg: string) => void
+  warn: (msg: string) => void,
+  sleep: Sleep = defaultSleep
 ): Promise<HttpResponse> {
-  let response: HttpResponse;
-  try {
-    response = await http({
-      url,
-      method: 'GET',
-      headers: {
-        'x-api-key': apiKey,
-      },
-    });
-  } catch (error) {
-    const message = `${context} failed: ${(error as Error).message}`;
-    warn(message);
-    throw new ApiError('network', message);
+  const attempt = async (): Promise<HttpResponse> => {
+    try {
+      return await http({
+        url,
+        method: 'GET',
+        headers: {
+          'x-api-key': apiKey,
+        },
+      });
+    } catch (error) {
+      throw new ApiError('network', `${context} failed: ${(error as Error).message}`);
+    }
+  };
+
+  let response = await attempt().catch((error: unknown) => error as ApiError);
+
+  const pause = retryPauseFor(response);
+  if (pause !== null) {
+    await sleep(pause);
+    response = await attempt().catch((error: unknown) => error as ApiError);
+  }
+
+  if (response instanceof ApiError) {
+    warn(response.message);
+    throw response;
   }
 
   if (response.status < 200 || response.status >= 300) {
@@ -265,6 +325,34 @@ async function safeFetch(
   }
 
   return response;
+}
+
+/**
+ * How long to wait before trying this one again, or `null` when trying again
+ * would only produce the same answer.
+ */
+function retryPauseFor(outcome: HttpResponse | ApiError): number | null {
+  if (outcome instanceof ApiError) {
+    // The request never landed. One more go covers a dropped connection.
+    return outcome.code === 'network' ? RETRY_PAUSE_MS : null;
+  }
+  if (outcome.status === 429) {
+    const asked = retryAfterMs(getHeader(outcome.headers, 'retry-after'));
+    if (asked === null) return RETRY_PAUSE_MS;
+    // A long wait is not a pause, it is "come back later" — say so instead of
+    // holding the run open for it.
+    return asked <= MAX_RETRY_AFTER_MS ? asked : null;
+  }
+  return outcome.status >= 500 ? RETRY_PAUSE_MS : null;
+}
+
+/** `Retry-After` in milliseconds — seconds or an HTTP date, per RFC 9110. */
+function retryAfterMs(header: string | null): number | null {
+  if (!header) return null;
+  const seconds = Number(header.trim());
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const at = Date.parse(header);
+  return Number.isNaN(at) ? null : Math.max(0, at - Date.now());
 }
 
 function parseJson(

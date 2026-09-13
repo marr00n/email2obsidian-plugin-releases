@@ -109,7 +109,7 @@ describe('attachments and a rate limited service', () => {
 
     const result = await saveOne(downloader, sleep);
 
-    expect(waits).toEqual([1000]);
+    expect(waits).toEqual([3000]);
     expect(result.errors).toEqual([]);
     expect(result.savedPathById[101]).toBe('Assets/file-101.txt');
   });
@@ -127,8 +127,8 @@ describe('attachments and a rate limited service', () => {
     await expect(saveOne(downloader, sleep)).rejects.toMatchObject({
       code: 'rate-limited',
     });
-    expect(waits).toEqual([1000, 3000]);
-    expect(downloader).toHaveBeenCalledTimes(3);
+    expect(waits).toEqual([3000]);
+    expect(downloader).toHaveBeenCalledTimes(2);
   });
 
   it('still reports any other download failure per file, and writes the rest', async () => {

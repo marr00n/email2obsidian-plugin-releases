@@ -130,10 +130,13 @@ export async function saveBinaryData(opts: {
 }
 
 /**
- * How long to wait before each retry of a rate-limited download. Two retries,
- * then the run gives up on the service rather than on the file.
+ * How long to wait before each retry of a rate-limited download.
+ *
+ * One, deliberately: the transport already retries a 429 once (`safeFetch`),
+ * so each attempt here is two requests, and a rate limit that survives both
+ * of these is the service meaning it.
  */
-const RATE_LIMIT_RETRY_DELAYS_MS = [1000, 3000];
+const RATE_LIMIT_RETRY_DELAYS_MS = [3000];
 
 const defaultSleep: Sleep = (ms) =>
   new Promise((resolve) => setTimeout(resolve, ms));

@@ -313,3 +313,41 @@ describe('debounced text field saves', () => {
     expect(save).not.toHaveBeenCalled();
   });
 });
+
+describe('a notes folder the plugin cannot use', () => {
+  beforeEach(() => {
+    (global as any).window = {
+      setInterval: vi.fn((fn: any, ms: number) => setTimeout(fn, ms)),
+      clearInterval: vi.fn((id: any) => clearTimeout(id)),
+    };
+  });
+
+  afterEach(() => {
+    delete (global as any).window;
+  });
+
+  it('keeps the folder already in use rather than falling back to the default', () => {
+    // A folder that cannot be turned into a path — here, one that is not even
+    // a string, which is what a corrupted data.json hands over. Before, the
+    // setting quietly became the shipped `E2Oinbox` and the next fetch filed
+    // the user's email there.
+    const kept = normalizeSettings(
+      { apiKey: 'k', notesFolder: 42 },
+      { fallbackFolder: 'Inbox' }
+    );
+
+    expect(kept.notesFolder).toBe('Inbox');
+    // With no folder in use yet — a first load — the default is still right.
+    expect(normalizeSettings({ apiKey: 'k', notesFolder: 42 }).notesFolder).toBe(
+      'E2Oinbox'
+    );
+  });
+
+  it('keeps the cleaned-up form of a folder it can use', async () => {
+    const plugin = makePlugin();
+
+    await plugin.updateSettings({ notesFolder: 'Inbox//Mail' });
+
+    expect(plugin.settings.notesFolder).toBe('Inbox/Mail');
+  });
+});
