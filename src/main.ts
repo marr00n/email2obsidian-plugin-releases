@@ -88,6 +88,12 @@ export default class Email2ObsidianPlugin extends Plugin {
   private isSyncing = false;
   private intervalHandle: number | null = null;
   /**
+   * Set the moment Obsidian starts unloading the plugin. A fetch already in
+   * flight reads it and stops rather than carrying on writing notes and
+   * popping up notices from a plugin the user has just turned off.
+   */
+  private unloading = false;
+  /**
    * The one seam everything under a sync reports through. Rebuilt whenever
    * settings change so the debug toggle takes effect immediately; the Obsidian
    * half (`Notice`, `console`) is wired here and nowhere else.
@@ -115,7 +121,13 @@ export default class Email2ObsidianPlugin extends Plugin {
     });
 
     if (this.settings.runOnOpen) {
-      void this.handleSync('fetch-new');
+      // Not straight away: at `onload` Obsidian is still building the vault
+      // index, and both the Note Namer's folder scan and every attachment
+      // path resolve against it.
+      this.app.workspace.onLayoutReady(() => {
+        if (this.unloading) return;
+        void this.handleSync('fetch-new');
+      });
     }
 
     this.setupScheduler(false);
@@ -161,6 +173,8 @@ export default class Email2ObsidianPlugin extends Plugin {
   private makeReport(debugEnabled: boolean): SyncReport {
     return createSyncReport({
       showNotice: (msg) => {
+        // Nothing pops up from a plugin the user has just turned off.
+        if (this.unloading) return;
         new Notice(msg);
       },
       debugEnabled,
@@ -196,7 +210,13 @@ export default class Email2ObsidianPlugin extends Plugin {
         plugin: this,
         client: this.client,
         report: this.report,
+        isCancelled: () => this.unloading,
       });
+
+      // The run has already committed whatever notes it wrote — that has to
+      // happen, or they import again — but nothing further belongs to a
+      // plugin that is being unloaded.
+      if (this.unloading) return;
 
       this.settings.lastRunAt = new Date().toISOString();
       // What settings shows between runs, replaced rather than merged: both
@@ -252,13 +272,19 @@ export default class Email2ObsidianPlugin extends Plugin {
       void this.handleSync('fetch-new');
     }
 
-    this.intervalHandle = window.setInterval(() => {
-      void this.handleSync('fetch-new');
-    }, delay);
+    // Registered with Obsidian as well as held here: Obsidian clears its
+    // registered intervals on unload, so a mistake in this class can no
+    // longer leave a timer running after the plugin is gone.
+    this.intervalHandle = this.registerInterval(
+      window.setInterval(() => {
+        void this.handleSync('fetch-new');
+      }, delay)
+    );
     this.report.debug(`Scheduled periodic sync every ${delay}ms`);
   }
 
   onunload(): void {
+    this.unloading = true;
     if (this.intervalHandle) {
       window.clearInterval(this.intervalHandle);
     }
@@ -414,7 +440,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setHeading()
-      .setName('Fetch Notes Automatically');
+      .setName('Fetch notes automatically');
 
     new Setting(containerEl)
       .setName('Background fetch')
@@ -442,7 +468,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Fetch interval')
-      .setDesc('How frequently would you like to check for new notes? (Only if Background Fetch is enabled.)')
+      .setDesc('How often should the plugin check for new notes? Only used when background fetch is on.')
       .addDropdown((dropdown) => {
         dropdown
           .addOptions({
@@ -573,7 +599,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setHeading()
-      .setName('Vault Routing (Pro Only)')
+      .setName('Vault routing (Pro only)')
       .setDesc(headingDesc);
 
     const markersDesc = document.createDocumentFragment();
@@ -600,7 +626,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
       .setName('Markers')
       .setDesc(markersDesc)
       .addText((text) => {
-        text.setPlaceholder('E.g. work; second brain');
+        text.setPlaceholder('For example: work; second brain');
         text.setValue(formatVaultMarkers(settings.vaultMarkers));
         this.debounceText(text.inputEl, async (value) => {
           await this.plugin.updateSettings({ vaultMarkers: parseVaultMarkers(value) });
@@ -631,6 +657,11 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
         button.setButtonText('Fetch now');
         button.setDisabled(true);
         button.onClick(() => {
+          // This whole tab is built with `display()`, which Obsidian 1.13
+          // deprecated in favour of `getSettingDefinitions`. Migrating it is
+          // its own piece of work; until then, redrawing after a fetch is
+          // what shows the user the emails that just arrived.
+          // eslint-disable-next-line @typescript-eslint/no-deprecated
           void this.plugin.handleSync('fetch-new').then(() => this.display());
         });
       });

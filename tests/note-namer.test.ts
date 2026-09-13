@@ -148,3 +148,72 @@ describe('openNoteNames', () => {
     expect(paths).toEqual(['Notes/Same.md', 'Notes/Same-1.md', 'Notes/Same-2.md']);
   });
 });
+
+describe('openNoteNames and what the file system counts as the same name', () => {
+  it('treats a name differing only in case as taken', async () => {
+    // macOS and Windows both hold one file for `Report.md` and `report.md`.
+    // Handing out the second, Obsidian refuses to create it and the email
+    // fails on every run until the service deletes it 72 hours later.
+    const { namer } = await namerOver('Notes', ['Report.md']);
+
+    expect(namer.reserve('report', CREATED)).toBe('Notes/report-1.md');
+  });
+
+  it('treats the two Unicode spellings of an accent as the same name', async () => {
+    // `Café` written with a precomposed é, then asked for with `e` plus a
+    // combining accent. macOS stores one file for both.
+    const { namer } = await namerOver('Notes', ['Caf\u00e9.md']);
+
+    expect(namer.reserve('Cafe\u0301', CREATED)).toBe('Notes/Cafe\u0301-1.md');
+  });
+
+  it('keeps names it hands out apart under the same folding', async () => {
+    const { namer } = await namerOver('Notes');
+
+    expect(namer.reserve('Invoice', CREATED)).toBe('Notes/Invoice.md');
+    expect(namer.reserve('INVOICE', CREATED)).toBe('Notes/INVOICE-1.md');
+  });
+
+  it('caps a long subject at what the file system accepts', async () => {
+    const { namer } = await namerOver('Notes');
+    const longSubject = 'a'.repeat(400);
+
+    const first = namer.reserve(longSubject, CREATED);
+    const name = first.slice('Notes/'.length);
+    expect(name.length).toBe(255);
+    expect(name.endsWith('.md')).toBe(true);
+
+    // And the suffix that keeps the second one distinct survives the cap.
+    const second = namer.reserve(longSubject, CREATED).slice('Notes/'.length);
+    expect(second.length).toBe(255);
+    expect(second.endsWith('-1.md')).toBe(true);
+    expect(second).not.toBe(name);
+  });
+
+  it('measures the cap in bytes, not characters', async () => {
+    const { namer } = await namerOver('Notes');
+
+    // Each of these is three UTF-8 bytes, so far fewer than 252 fit.
+    const name = namer.reserve('あ'.repeat(200), CREATED).slice('Notes/'.length);
+
+    expect(new TextEncoder().encode(name).length).toBeLessThanOrEqual(255);
+    // Cut on a character boundary, never mid-character.
+    expect(name).not.toContain('\ufffd');
+  });
+
+  it('sidesteps the names Windows reserves', async () => {
+    const { namer } = await namerOver('Notes');
+
+    expect(namer.reserve('NUL', CREATED)).toBe('Notes/NUL-note.md');
+    expect(namer.reserve('com1', CREATED)).toBe('Notes/com1-note.md');
+    // Only the exact reserved word: a subject that merely starts with one is
+    // an ordinary name.
+    expect(namer.reserve('Console output', CREATED)).toBe('Notes/Console output.md');
+  });
+
+  it('drops a trailing dot, which Windows also refuses', async () => {
+    const { namer } = await namerOver('Notes');
+
+    expect(namer.reserve('Meeting notes...', CREATED)).toBe('Notes/Meeting notes.md');
+  });
+});

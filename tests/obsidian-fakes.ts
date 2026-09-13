@@ -94,6 +94,18 @@ export class Vault {
     return file.text ?? '';
   }
 
+  /** Drop a file from the vault, as trashing it does. */
+  forget(p: string): void {
+    const normalized = normalizePath(p);
+    const file = this.files.get(normalized);
+    if (!file) return;
+    this.files.delete(normalized);
+    const parent = this.files.get(dirname(normalized));
+    if (parent instanceof TFolder) {
+      parent.children = parent.children.filter((child) => child !== file);
+    }
+  }
+
   async create(p: string, contents: string): Promise<TFile> {
     const normalized = normalizePath(p);
     const file = new TFile(normalized, null, contents);
@@ -156,9 +168,17 @@ export class PluginSettingTab {
 export class ButtonComponent {}
 export class ToggleComponent {}
 
+/** Just enough Workspace for `onLayoutReady`, which fires straight away. */
+export class Workspace {
+  onLayoutReady(callback: () => void): void {
+    callback();
+  }
+}
+
 export class App {
   vault: Vault;
   fileManager: FileManager;
+  workspace = new Workspace();
   constructor(vault: Vault) {
     this.vault = vault;
     this.fileManager = new FileManager(undefined, vault);
@@ -173,7 +193,9 @@ export class Plugin {
   }
   addCommand() {}
   addSettingTab() {}
-  registerInterval() {}
+  registerInterval(id: number): number {
+    return id;
+  }
   async loadData() {
     return this.data;
   }
@@ -205,7 +227,10 @@ export class FileManager {
    * of commit d2961b6 (attachments saved before the note existed), and the
    * regression test for it would pass with the fix deleted.
    */
+  private vault?: Vault;
+
   constructor(resolver?: AttachmentPathResolver, vault?: Vault) {
+    this.vault = vault;
     this.resolver =
       resolver ??
       ((name: string, sourcePath: string) => {
@@ -227,6 +252,14 @@ export class FileManager {
         if (!parent) return normalizePath(name);
         return normalizePath(`${parent}/${name}`);
       });
+  }
+
+  /** Mirrors Obsidian's trashFile: the file leaves the vault. */
+  async trashFile(file: FakeAbstractFile): Promise<void> {
+    if (!this.vault) {
+      throw new Error('FileManager fake: construct it with a vault to trash files.');
+    }
+    this.vault.forget(file.path);
   }
 
   async getAvailablePathForAttachment(

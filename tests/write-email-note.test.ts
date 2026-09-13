@@ -4,7 +4,7 @@ import { App, Plugin, TFile, Vault } from 'obsidian';
 import { writeEmailNote, type WriteEmailNoteContext } from '../src/write-email-note';
 import { openNoteNames } from '../src/note-namer';
 import { silentSyncReport } from '../src/sync-report';
-import type { AttachmentMeta, EmailDetail } from '../src/api';
+import { ApiError, type AttachmentMeta, type EmailDetail } from '../src/api';
 
 const NOTE_FOLDER = 'Notes';
 
@@ -287,5 +287,45 @@ describe('writeEmailNote and files it did not write', () => {
 
     expect(result.notePath).toBe('Notes/Hello-1.md');
     expect(noteText(vault, 'Notes/Hello.md')).toContain('Notes on the plugin');
+  });
+});
+
+describe('writeEmailNote when the fill-in step fails', () => {
+  it('takes back the empty note it created, so no blank twin is left behind', async () => {
+    const { ctx, vault } = await makeContext();
+    const failing: WriteEmailNoteContext = {
+      ...ctx,
+      downloadAttachment: () => {
+        throw new ApiError('rate-limited', 'slow down', 429);
+      },
+      sleep: async () => {},
+    };
+
+    await expect(
+      writeEmailNote(failing, email({ attachments: [attachment({ id: 10 })] }))
+    ).rejects.toMatchObject({ code: 'rate-limited' });
+
+    // Left there, it would be a blank note in the inbox for ever, and the
+    // next run would write this email beside it as `Hello-1.md`.
+    expect(vault.getAbstractFileByPath('Notes/Hello.md')).toBeNull();
+  });
+
+  it('leaves a note alone if something else has written to it in the meantime', async () => {
+    const { ctx, vault } = await makeContext();
+    const failing: WriteEmailNoteContext = {
+      ...ctx,
+      downloadAttachment: async () => {
+        const placeholder = vault.getAbstractFileByPath('Notes/Hello.md') as TFile;
+        placeholder.text = 'Someone else got here first.';
+        throw new ApiError('rate-limited', 'slow down', 429);
+      },
+      sleep: async () => {},
+    };
+
+    await expect(
+      writeEmailNote(failing, email({ attachments: [attachment({ id: 10 })] }))
+    ).rejects.toMatchObject({ code: 'rate-limited' });
+
+    expect(noteText(vault, 'Notes/Hello.md')).toBe('Someone else got here first.');
   });
 });

@@ -4,6 +4,7 @@ import {
   saveAttachments,
   saveBinaryData,
   type AttachmentSaveError,
+  type Sleep,
 } from './attachments';
 import { renderEmailMarkdown } from './helpers';
 import type { NoteNamer } from './note-namer';
@@ -19,6 +20,8 @@ export interface WriteEmailNoteContext {
   noteFolder: string;
   /** The Service Client's `downloadAttachment`; credentials live in the client. */
   downloadAttachment: DownloadAttachment;
+  /** Passed to `saveAttachments` for its retry pause; injectable for tests. */
+  sleep?: Sleep;
   /**
    * Where this job's diagnostics and per-file warnings go — passed straight
    * through to `saveAttachments`. Use `silentSyncReport()` to say nothing.
@@ -63,14 +66,17 @@ export interface WriteEmailNoteResult {
  * Callers do not need to know any of this — nor that rendering the body itself
  * writes files (inline data URIs), nor that those writes need a `sourcePath`.
  *
- * Throws only if the note itself cannot be written; attachment trouble comes
- * back in `attachmentErrors`.
+ * Attachment trouble comes back in `attachmentErrors` rather than thrown —
+ * one bad file does not cost the user the note. It throws when the note
+ * itself cannot be written, and when the service rate limits a download: that
+ * one is the run's to answer, not this note's (see `saveAttachments`). Either
+ * way the empty note phase one created is taken back on the way out.
  */
 export async function writeEmailNote(
   ctx: WriteEmailNoteContext,
   detail: EmailDetail
 ): Promise<WriteEmailNoteResult> {
-  const { vault, fileManager, namer, noteFolder, downloadAttachment, report } = ctx;
+  const { vault, namer } = ctx;
 
   // Partition once, here. `saveAttachments` takes the non-inline files;
   // `renderEmailMarkdown` lists those same files in the Attachments section.
@@ -83,6 +89,31 @@ export async function writeEmailNote(
   // Phase one: the empty note. See the ordering invariant above.
   await writeOrCreateNote(vault, notePath, '');
 
+  try {
+    return await fillNote(ctx, detail, notePath, { inline, nonInline });
+  } catch (error) {
+    // Phase two never ran, so the note is still the empty placeholder phase
+    // one made. Left there it is a blank note in the user's inbox for ever,
+    // and because its name is taken the next run writes the same email
+    // beside it as `-1`. Take it back before the failure goes up.
+    await discardEmptyNote(ctx, notePath);
+    throw error;
+  }
+}
+
+/**
+ * Phase two: everything that happens once the empty note exists — the files,
+ * the render, and the contents written into the note phase one created.
+ */
+async function fillNote(
+  ctx: WriteEmailNoteContext,
+  detail: EmailDetail,
+  notePath: string,
+  attachments: { inline: AttachmentMeta[]; nonInline: AttachmentMeta[] }
+): Promise<WriteEmailNoteResult> {
+  const { vault, fileManager, noteFolder, downloadAttachment, report, sleep } = ctx;
+  const { inline, nonInline } = attachments;
+
   const attachmentErrors: AttachmentSaveError[] = [];
 
   const saveStart = Date.now();
@@ -93,6 +124,7 @@ export async function writeEmailNote(
     sourcePath: notePath,
     downloader: downloadAttachment,
     report,
+    sleep,
   });
   report.debug(
     `saveAttachments for email ${detail.id} completed in ${Date.now() - saveStart}ms; saved ${
@@ -132,6 +164,29 @@ export async function writeEmailNote(
   report.debug(`writeOrCreateNote ${notePath || '(root)'} in ${Date.now() - writeStart}ms`);
 
   return { notePath, attachmentErrors };
+}
+
+/**
+ * Undo phase one. Only ever called on a file this run created moments ago,
+ * and only while it is still empty — anything written into it since is
+ * someone else's and stays. Trashed rather than deleted, so it follows the
+ * user's own deletion preference.
+ */
+async function discardEmptyNote(
+  ctx: WriteEmailNoteContext,
+  notePath: string
+): Promise<void> {
+  const file = ctx.vault.getAbstractFileByPath(notePath);
+  if (!(file instanceof TFile)) return;
+  try {
+    if ((await ctx.vault.read(file)).trim().length) return;
+    await ctx.fileManager.trashFile(file);
+  } catch (error) {
+    // The original failure is the one worth reporting; this is a tidy-up.
+    ctx.report.warn(
+      `Could not remove the empty note at ${notePath}: ${(error as Error).message}`
+    );
+  }
 }
 
 /**
