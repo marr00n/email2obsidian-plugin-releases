@@ -94,7 +94,16 @@ export default class Email2ObsidianPlugin extends Plugin {
   private report: SyncReport = this.makeReport(false);
   private client: E2oClient = this.makeClient('');
 
-  async onload(): Promise<void> {
+  onload(): void {
+    // Obsidian declares onload as void and never awaits it, so the async
+    // work runs behind an explicit void with its failure reported here
+    // rather than dropped as an unhandled rejection.
+    void this.initialise().catch((error: unknown) => {
+      console.error('[Email2Obsidian] failed to load', error);
+    });
+  }
+
+  private async initialise(): Promise<void> {
     await this.loadSettings();
     this.report = this.makeReport(this.settings.debugLogging);
     this.client = this.makeClient(this.settings.apiKey);
