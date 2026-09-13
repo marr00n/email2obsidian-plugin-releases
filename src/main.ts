@@ -419,7 +419,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
       )
       .addText((text) => {
         text.inputEl.type = 'password';
-        text.setPlaceholder('Example: 12345678-1234-1234-1234-123456789abc');
+        text.setPlaceholder('E.g. 12345678-1234-1234-1234-123456789abc');
         text.setValue(this.plugin.settings.apiKey);
         this.debounceText(text.inputEl, (value) =>
           this.plugin.updateSettings({ apiKey: value })
@@ -439,7 +439,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
     );
     notesFolderDesc.appendChild(document.createElement('br'));
     notesFolderDesc.append(
-      "Leave blank for vault root. Email attachments follow Obsidian default settings."
+      "Leave blank for vault root. Email attachments follow your vault's default settings."
     );
 
     new Setting(containerEl)
@@ -637,7 +637,8 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
       code('work'),
       ' and only emails marked ',
       code('@@work'),
-      ' land here. Leave blank and this vault fetches every email, marked or not.'
+      ' land here.',
+      ' Leave blank to fetch ALL email.'
     );
     if (settings.lastDeclined.length) {
       markersDesc.appendChild(document.createElement('br'));
@@ -654,7 +655,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
       .setName('Markers')
       .setDesc(markersDesc)
       .addText((text) => {
-        text.setPlaceholder('For example: work; second brain');
+        text.setPlaceholder('E.g. work; second brain');
         text.setValue(formatVaultMarkers(settings.vaultMarkers));
         this.debounceText(text.inputEl, async (value) => {
           await this.plugin.updateSettings({ vaultMarkers: parseVaultMarkers(value) });
@@ -666,7 +667,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
       });
 
     this.unmarkedSetting = new Setting(containerEl)
-      .setName('Unmarked emails')
+      .setName('Fetch unmarked emails')
       .addToggle((toggle) => {
         this.unmarkedToggle = toggle;
         toggle.onChange(async (value) => {
@@ -702,7 +703,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
           'Email arrived with @@ still in the subject, which means the ' +
             'service is not reading markers for your account. Notes still ' +
             'import, with the @@ text left in the title, and the markers ' +
-            'above have nothing to match until vault routing is enabled.'
+            'above have nothing to match until E2O plan is upgraded to Pro.'
         );
     }
   }
@@ -764,16 +765,15 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
     code.textContent = '@@';
     if (filtering) {
       desc.append(
-        'Also fetch emails that have no ',
+        'Enable to also fetch emails that have no ',
         code,
-        ' marker. Turn off to keep this vault to its markers only.'
+        ' marker.'
       );
     } else {
       desc.append(
-        'Emails with no ',
+        'Unmarked = emails with no ',
         code,
-        ' marker. While the markers field is blank this vault fetches ' +
-          'everything, so these always arrive. Add a marker above to decide.'
+        ' marker. Enabled while the markers field setting is blank.'
       );
     }
     setting.setDesc(desc);
