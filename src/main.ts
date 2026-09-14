@@ -655,7 +655,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
       .setName('Markers')
       .setDesc(markersDesc)
       .addText((text) => {
-        text.setPlaceholder('E.g. work; second brain');
+        text.setPlaceholder('Eg work; second brain');
         text.setValue(formatVaultMarkers(settings.vaultMarkers));
         this.debounceText(text.inputEl, async (value) => {
           await this.plugin.updateSettings({ vaultMarkers: parseVaultMarkers(value) });
