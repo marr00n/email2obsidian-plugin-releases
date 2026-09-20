@@ -51,6 +51,15 @@ export interface Email2ObsidianSettings {
   vaultMarkers: string[];
   /** Whether this Obsidian Vault takes Unmarked Email. */
   receiveUnmarked: boolean;
+  /**
+   * Comma-separated literal prefixes ("RE:, FWD:, FWD-") stripped off the
+   * start of a subject before it becomes a filename, or \u2014 when
+   * `subjectPrefixIsRegex` is on \u2014 a single regex source doing the same
+   * job. Blank strips nothing.
+   */
+  subjectPrefixStrip: string;
+  /** Treat `subjectPrefixStrip` as a regex source rather than a list. */
+  subjectPrefixIsRegex: boolean;
   /** What the last fetch turned away, so settings can say so between runs. */
   lastDeclined: MarkerCount[];
   /** The last fetch saw the one signature of an account without vault routing. */
@@ -79,6 +88,8 @@ const DEFAULT_SETTINGS: Email2ObsidianSettings = {
   debugLogging: false,
   vaultMarkers: [],
   receiveUnmarked: true,
+  subjectPrefixStrip: '',
+  subjectPrefixIsRegex: false,
   lastDeclined: [],
   starterSignatureSeen: false,
 };
@@ -464,6 +475,43 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
             },
           }
         );
+      });
+
+    const prefixDesc = document.createDocumentFragment();
+    prefixDesc.append(
+      'Comma-separated prefixes to strip from the start of a subject before it becomes a filename, e.g. '
+    );
+    const prefixCode = document.createElement('code');
+    prefixCode.textContent = 'Re:, fwd:, fwd-';
+    prefixDesc.appendChild(prefixCode);
+    prefixDesc.append(
+      '. Case-insensitive, matched only at the very start of the subject (repeatedly, so \u201cRe: Fwd: Invoice\u201d still becomes \u201cInvoice\u201d), and never touches the note\u2019s own title. Leave blank to strip nothing.'
+    );
+
+    new Setting(containerEl)
+      .setName('Strip subject prefixes')
+      .setDesc(prefixDesc)
+      .addText((text) => {
+        text.setPlaceholder('Eg re:, fwd:, fwd-');
+        text.setValue(this.plugin.settings.subjectPrefixStrip);
+        this.debounceText(text.inputEl, (value) =>
+          this.plugin.updateSettings({ subjectPrefixStrip: value })
+        );
+      });
+
+    const prefixRegexDesc = document.createDocumentFragment();
+    prefixRegexDesc.append(
+      'Advanced: treat the text above as a single regular expression (anchored to the start of the subject, case-insensitive) instead of a comma-separated list.'
+    );
+
+    new Setting(containerEl)
+      .setName('Subject prefix is a regular expression')
+      .setDesc(prefixRegexDesc)
+      .addToggle((toggle) => {
+        toggle.setValue(this.plugin.settings.subjectPrefixIsRegex);
+        toggle.onChange(async (value) => {
+          await this.plugin.updateSettings({ subjectPrefixIsRegex: value });
+        });
       });
 
     new Setting(containerEl)
@@ -898,6 +946,9 @@ function normalizeSettings(
     receiveUnmarked: merged.receiveUnmarked === undefined
       ? DEFAULT_SETTINGS.receiveUnmarked
       : Boolean(merged.receiveUnmarked),
+    subjectPrefixStrip:
+      typeof merged.subjectPrefixStrip === 'string' ? merged.subjectPrefixStrip : '',
+    subjectPrefixIsRegex: Boolean(merged.subjectPrefixIsRegex),
     lastDeclined: normalizeMarkerCounts(merged.lastDeclined),
     starterSignatureSeen: Boolean(merged.starterSignatureSeen),
     lastRunAt:
