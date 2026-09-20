@@ -26,6 +26,13 @@ export interface PipelineSettings {
   vaultMarkers?: string[];
   /** Whether Unmarked Email is claimed. Absent means yes, as it always was. */
   receiveUnmarked?: boolean;
+  /**
+   * Whether an email carrying attachments gets its own folder alongside its
+   * note, rather than the note under `notesFolder` and its files wherever
+   * the Obsidian Vault's own attachment setting points. Absent means yes,
+   * this feature's shipped default.
+   */
+  useAttachmentFolders?: boolean;
 }
 
 export type { SyncMode };
@@ -157,6 +164,7 @@ export async function runSync(opts: SyncOptions): Promise<SyncResult> {
       client.downloadAttachment(id, expectedFileName),
     report,
     sleep: opts.sleep,
+    useAttachmentFolders: settings.useAttachmentFolders,
   };
 
   // Flipped by a worker the instant it hits a 429; read back by the pool

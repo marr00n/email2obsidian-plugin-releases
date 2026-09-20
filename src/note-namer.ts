@@ -146,6 +146,13 @@ function scanFileNames(
     for (const child of target.children) {
       if (child instanceof TFile) {
         names.add(nameKey(child.name));
+      } else if (child instanceof TFolder) {
+        // A per-email attachment folder shares its base name with the note
+        // inside it (see `write-email-note.ts`): `Invoice/Invoice.md` rather
+        // than `Invoice.md`. Marking the name it would have produced as
+        // taken keeps a later email with the same subject from landing back
+        // at the top level under a name this folder already answers to.
+        names.add(nameKey(`${child.name}.md`));
       }
     }
   } catch (error: unknown) {
