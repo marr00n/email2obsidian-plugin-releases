@@ -2,7 +2,7 @@
 import { Vault, TFile, FileManager } from 'obsidian';
 import { ApiError } from './api';
 import type { AttachmentDownload, AttachmentMeta, DownloadAttachment } from './api';
-import { basename, extname } from './path-utils';
+import { basename, extname, joinPosix } from './path-utils';
 import { mapWithConcurrency } from './concurrency';
 import type { SyncReport } from './sync-report';
 
@@ -22,6 +22,14 @@ export interface SaveAttachmentsOptions {
   downloader: DownloadAttachment;
   /** How the retry pause is taken. Injectable so tests need not really wait. */
   sleep?: Sleep;
+  /**
+   * When set, every file is saved directly into this folder instead of
+   * wherever `fileManager.getAvailablePathForAttachment` would put it \u2014
+   * the per-email attachment folder (see `write-email-note.ts`). Undefined
+   * keeps the plugin's long-standing behaviour of following the Obsidian
+   * Vault's own attachment-location setting.
+   */
+  folderOverride?: string;
 }
 
 export type Sleep = (ms: number) => Promise<void>;
@@ -112,21 +120,41 @@ export async function saveBinaryData(opts: {
   suggestedName: string;
   sourcePath: string;
   mimeType?: string | null;
+  /** See `SaveAttachmentsOptions.folderOverride`. */
+  folderOverride?: string;
 }): Promise<{ filename: string; path: string }> {
-  const { vault, fileManager, data, suggestedName, sourcePath, mimeType } = opts;
+  const { vault, fileManager, data, suggestedName, sourcePath, mimeType, folderOverride } = opts;
 
   const sanitized = sanitizeAttachmentName(suggestedName);
   const providedExt = extname(sanitized);
   const extension = providedExt || getExtensionForMime(mimeType);
   const base = basename(sanitized, providedExt);
+  const fileName = `${base}${extension}`;
 
-  const path = await fileManager.getAvailablePathForAttachment(
-    `${base}${extension}`,
-    sourcePath
-  );
+  const path = folderOverride !== undefined
+    ? getAvailablePathInFolder(vault, folderOverride, fileName)
+    : await fileManager.getAvailablePathForAttachment(fileName, sourcePath);
   await writeBinaryFile(vault, path, data);
 
   return { filename: basename(path), path };
+}
+
+/**
+ * The collision-safe equivalent of `fileManager.getAvailablePathForAttachment`
+ * for a folder chosen by the plugin rather than by the user's attachment
+ * settings: try `name.ext`, then `name 1.ext`, `name 2.ext`, and so on, until
+ * nothing in the vault sits at that path.
+ */
+function getAvailablePathInFolder(vault: Vault, folder: string, fileName: string): string {
+  const ext = extname(fileName);
+  const base = basename(fileName, ext);
+  let candidate = joinPosix(folder, fileName);
+  let suffix = 1;
+  while (vault.getAbstractFileByPath(candidate)) {
+    candidate = joinPosix(folder, `${base} ${suffix}${ext}`);
+    suffix += 1;
+  }
+  return candidate;
 }
 
 /**
@@ -175,6 +203,7 @@ export async function saveAttachments(
     report,
     downloader,
     sleep = defaultSleep,
+    folderOverride,
   } = opts;
 
   const errors: AttachmentSaveError[] = [];
@@ -235,6 +264,7 @@ export async function saveAttachments(
         fileManager,
         sourcePath,
         mimeType: downloaded.mimeType,
+        folderOverride,
       });
       savedPathById[att.id] = saved.path;
     } catch (error) {

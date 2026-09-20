@@ -39,6 +39,13 @@ export function extname(filePath: string): string {
   return base.slice(index);
 }
 
+/** The containing folder of `filePath`, `''` for a path with no `/`. */
+export function dirname(filePath: string): string {
+  const normalized = normalizeSlashes(filePath).replace(/\/+$/g, '');
+  const index = normalized.lastIndexOf('/');
+  return index === -1 ? '' : normalized.slice(0, index);
+}
+
 export function isRootPath(value: string | null | undefined): boolean {
   if (value == null) {
     return false;
