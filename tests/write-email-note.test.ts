@@ -90,18 +90,47 @@ describe('writeEmailNote', () => {
       })
     );
 
-    expect(result.notePath).toBe('Notes/Hello.md');
+    // Attachments mean this email gets its own folder: the note and its
+    // files all land inside `Notes/Hello/`, named after the note itself.
+    expect(result.notePath).toBe('Notes/Hello/Hello.md');
     expect(result.attachmentErrors).toEqual([]);
 
-    expect(vault.getAbstractFileByPath('Notes/doc.txt')).toBeTruthy();
-    expect(vault.getAbstractFileByPath('Notes/inline-1-0.txt')).toBeTruthy();
+    expect(vault.getAbstractFileByPath('Notes/Hello/doc.txt')).toBeTruthy();
+    expect(vault.getAbstractFileByPath('Notes/Hello/inline-1-0.txt')).toBeTruthy();
 
     const text = noteText(vault, result.notePath);
     expect(text).toContain('title: "Hello"');
     expect(text).toContain('email2obsidianID: 1');
-    expect(text).toContain('![[Notes/inline-1-0.txt]]');
+    expect(text).toContain('![[Notes/Hello/inline-1-0.txt]]');
     expect(text).toContain('## Email Attachments');
-    expect(text).toContain('- [doc.txt](Notes/doc.txt)');
+    expect(text).toContain('- [doc.txt](Notes/Hello/doc.txt)');
+  });
+
+  it('leaves a note without attachments at the top level, untouched by the folder feature', async () => {
+    const { ctx, vault } = await makeContext();
+
+    const result = await writeEmailNote(ctx, email());
+
+    expect(result.notePath).toBe('Notes/Hello.md');
+    expect(vault.getAbstractFileByPath('Notes/Hello')).toBeNull();
+  });
+
+  it('turning the setting off keeps the note and its files at the top level, as before the feature', async () => {
+    const { ctx, vault } = await makeContext({ 10: 'doc contents' });
+    const flat: WriteEmailNoteContext = { ...ctx, useAttachmentFolders: false };
+
+    const result = await writeEmailNote(
+      flat,
+      email({
+        markdownBody: 'Body ![](data:text/plain;base64,QQ==)',
+        attachments: [attachment({ id: 10, fileName: 'doc.txt' })],
+      })
+    );
+
+    expect(result.notePath).toBe('Notes/Hello.md');
+    expect(vault.getAbstractFileByPath('Notes/doc.txt')).toBeTruthy();
+    expect(vault.getAbstractFileByPath('Notes/inline-1-0.txt')).toBeTruthy();
+    expect(vault.getAbstractFileByPath('Notes/Hello')).toBeNull();
   });
 
   it('creates the note before saving files, so attachment locations resolve (regression, d2961b6)', async () => {
@@ -121,9 +150,10 @@ describe('writeEmailNote', () => {
 
     expect(result.attachmentErrors).toEqual([]);
     // Both save paths — downloaded attachment and inline data URI — resolved
-    // relative to the note's folder rather than failing or landing at the root.
-    expect(vault.getAbstractFileByPath('Notes/doc.txt')).toBeTruthy();
-    expect(vault.getAbstractFileByPath('Notes/inline-1-0.txt')).toBeTruthy();
+    // relative to the note's own per-email folder rather than failing or
+    // landing at the root.
+    expect(vault.getAbstractFileByPath('Notes/Hello/doc.txt')).toBeTruthy();
+    expect(vault.getAbstractFileByPath('Notes/Hello/inline-1-0.txt')).toBeTruthy();
     expect(vault.getAbstractFileByPath('doc.txt')).toBeNull();
   });
 
@@ -181,10 +211,10 @@ describe('writeEmailNote', () => {
     ]);
 
     const text = noteText(vault, result.notePath);
-    expect(vault.getAbstractFileByPath('Notes/ok.txt')).toBeTruthy();
+    expect(vault.getAbstractFileByPath('Notes/Hello/ok.txt')).toBeTruthy();
     // The failed download falls back to a plain folder link, and the failed
     // inline placeholder is left in the body as it arrived.
-    expect(text).toContain('- [gone.txt](Notes/gone.txt)');
+    expect(text).toContain('- [gone.txt](Notes/Hello/gone.txt)');
     expect(text).toContain('![](data:image/png;base64,****)');
   });
 
@@ -208,8 +238,8 @@ describe('writeEmailNote', () => {
     const text = noteText(vault, result.notePath);
     expect(text).not.toContain('inline.png');
     // ...and the non-inline one is listed, not embedded.
-    expect(text).toContain('- [doc.txt](Notes/doc.txt)');
-    expect(text).not.toContain('![[Notes/doc.txt]]');
+    expect(text).toContain('- [doc.txt](Notes/Hello/doc.txt)');
+    expect(text).not.toContain('![[Notes/Hello/doc.txt]]');
   });
 });
 
@@ -306,8 +336,10 @@ describe('writeEmailNote when the fill-in step fails', () => {
     ).rejects.toMatchObject({ code: 'rate-limited' });
 
     // Left there, it would be a blank note in the inbox for ever, and the
-    // next run would write this email beside it as `Hello-1.md`.
-    expect(vault.getAbstractFileByPath('Notes/Hello.md')).toBeNull();
+    // next run would write this email beside it as `Hello-1.md`. The
+    // attachment means this email got its own folder, so that is where the
+    // placeholder was.
+    expect(vault.getAbstractFileByPath('Notes/Hello/Hello.md')).toBeNull();
   });
 
   it('leaves a note alone if something else has written to it in the meantime', async () => {
@@ -315,7 +347,7 @@ describe('writeEmailNote when the fill-in step fails', () => {
     const failing: WriteEmailNoteContext = {
       ...ctx,
       downloadAttachment: async () => {
-        const placeholder = vault.getAbstractFileByPath('Notes/Hello.md') as TFile;
+        const placeholder = vault.getAbstractFileByPath('Notes/Hello/Hello.md') as TFile;
         placeholder.text = 'Someone else got here first.';
         throw new ApiError('rate-limited', 'slow down', 429);
       },
@@ -326,6 +358,6 @@ describe('writeEmailNote when the fill-in step fails', () => {
       writeEmailNote(failing, email({ attachments: [attachment({ id: 10 })] }))
     ).rejects.toMatchObject({ code: 'rate-limited' });
 
-    expect(noteText(vault, 'Notes/Hello.md')).toBe('Someone else got here first.');
+    expect(noteText(vault, 'Notes/Hello/Hello.md')).toBe('Someone else got here first.');
   });
 });

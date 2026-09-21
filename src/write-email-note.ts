@@ -1,4 +1,4 @@
-import { FileManager, TFile, Vault } from 'obsidian';
+import { FileManager, TFile, TFolder, Vault } from 'obsidian';
 import type { AttachmentMeta, DownloadAttachment, EmailDetail } from './api';
 import {
   saveAttachments,
@@ -9,6 +9,8 @@ import {
 import { renderEmailMarkdown } from './helpers';
 import type { NoteNamer } from './note-namer';
 import type { SyncReport } from './sync-report';
+import { ensureFolder } from './note-folder';
+import { basename, dirname, extname, joinPosix } from './path-utils';
 
 /** What one email-to-note job needs from its caller. */
 export interface WriteEmailNoteContext {
@@ -27,6 +29,15 @@ export interface WriteEmailNoteContext {
    * through to `saveAttachments`. Use `silentSyncReport()` to say nothing.
    */
   report: SyncReport;
+  /**
+   * Whether an email carrying attachments gets its own folder —
+   * `noteFolder/Subject/Subject.md` alongside `noteFolder/Subject/*` for the
+   * files — instead of the note landing under `noteFolder` on its own with
+   * its files wherever the Obsidian Vault's attachment setting points.
+   * Undefined means yes, this feature's shipped default; the settings toggle
+   * passes `false` to turn it off.
+   */
+  useAttachmentFolders?: boolean;
 }
 
 export interface WriteEmailNoteResult {
@@ -83,14 +94,20 @@ export async function writeEmailNote(
   // Inline attachments are not saved from this list at all — they reach the
   // note as data URIs in the body and are saved by the inline saver below.
   const { inline, nonInline } = partitionByInline(detail.attachments);
+  const hasAttachments = inline.length > 0 || nonInline.length > 0;
+  const useFolder = (ctx.useAttachmentFolders ?? true) && hasAttachments;
 
-  const notePath = await claimNotePath(vault, namer, detail);
+  const notePath = await claimNotePath(vault, namer, detail, useFolder);
+
+  if (useFolder) {
+    await ensureFolder(vault, dirname(notePath));
+  }
 
   // Phase one: the empty note. See the ordering invariant above.
   await writeOrCreateNote(vault, notePath, '');
 
   try {
-    return await fillNote(ctx, detail, notePath, { inline, nonInline });
+    return await fillNote(ctx, detail, notePath, { inline, nonInline }, useFolder);
   } catch (error) {
     // Phase two never ran, so the note is still the empty placeholder phase
     // one made. Left there it is a blank note in the user's inbox for ever,
@@ -109,10 +126,18 @@ async function fillNote(
   ctx: WriteEmailNoteContext,
   detail: EmailDetail,
   notePath: string,
-  attachments: { inline: AttachmentMeta[]; nonInline: AttachmentMeta[] }
+  attachments: { inline: AttachmentMeta[]; nonInline: AttachmentMeta[] },
+  useFolder: boolean
 ): Promise<WriteEmailNoteResult> {
   const { vault, fileManager, noteFolder, downloadAttachment, report, sleep } = ctx;
   const { inline, nonInline } = attachments;
+
+  // The per-email folder, when this email gets one — the note's own
+  // containing directory, since `notePath` was already claimed inside it.
+  // Passed to both savers below so every file this email owns lands beside
+  // its note rather than wherever the Obsidian Vault's attachment setting
+  // would otherwise put it.
+  const attachmentFolder = useFolder ? dirname(notePath) : undefined;
 
   const attachmentErrors: AttachmentSaveError[] = [];
 
@@ -125,6 +150,7 @@ async function fillNote(
     downloader: downloadAttachment,
     report,
     sleep,
+    folderOverride: attachmentFolder,
   });
   report.debug(
     `saveAttachments for email ${detail.id} completed in ${Date.now() - saveStart}ms; saved ${
@@ -136,7 +162,7 @@ async function fillNote(
   const renderStart = Date.now();
   const renderResult = await renderEmailMarkdown(
     detail,
-    { noteFolder },
+    { noteFolder: attachmentFolder ?? noteFolder },
     {
       nonInlineAttachments: nonInline,
       savedPaths: savedAttachments.savedPathById,
@@ -148,6 +174,7 @@ async function fillNote(
           suggestedName: opts.suggestedName,
           sourcePath: notePath,
           mimeType: opts.mimeType,
+          folderOverride: attachmentFolder,
         }),
     }
   );
@@ -218,21 +245,62 @@ const MAX_NAME_ATTEMPTS = 100;
  * Concurrent workers stay safe because `reserve` still hands out and records
  * each candidate in one tick; the awaits here only decide whether to keep the
  * name it gave or step past it, and a name stepped past stays reserved.
+ *
+ * A candidate can be occupied in either of two shapes now: the plain note
+ * file the namer named, or the per-email folder of the same base name with
+ * the note inside it (see `writeEmailNote`'s attachment folder). Both are
+ * checked regardless of what this email itself wants, so a subject that once
+ * arrived with attachments and later arrives without them (or the reverse)
+ * still finds and rewrites its own note rather than colliding with it.
  */
 async function claimNotePath(
   vault: Vault,
   namer: NoteNamer,
-  detail: EmailDetail
+  detail: EmailDetail,
+  useFolder: boolean
 ): Promise<string> {
   for (let attempt = 0; attempt < MAX_NAME_ATTEMPTS; attempt += 1) {
     const candidate = namer.reserve(detail.subject, detail.createdAt);
+
     const existing = vault.getAbstractFileByPath(candidate);
-    if (!(existing instanceof TFile)) return candidate;
-    if (await isOwnNote(vault, existing)) return candidate;
+    if (existing instanceof TFile) {
+      // Reuse it as it is — not what `useFolder` now asks for. A note is
+      // rewritten where it already lives; it is not moved between the two
+      // shapes on a later run.
+      if (await isOwnNote(vault, existing)) return candidate;
+      continue;
+    }
+    if (existing) continue;
+
+    const folderPath = attachmentFolderFor(candidate);
+    const folder = vault.getAbstractFileByPath(folderPath);
+    if (folder instanceof TFolder) {
+      const inner = vault.getAbstractFileByPath(notePathInFolder(candidate));
+      if (inner instanceof TFile && (await isOwnNote(vault, inner))) {
+        return notePathInFolder(candidate);
+      }
+      continue;
+    }
+    if (folder) continue;
+
+    return useFolder ? notePathInFolder(candidate) : candidate;
   }
   throw new Error(
     `Could not find a free filename for email ${detail.id} after ${MAX_NAME_ATTEMPTS} tries.`
   );
+}
+
+/**
+ * The per-email folder a note path would sit in if it carried attachments:
+ * `Notes/Hello.md` → `Notes/Hello`.
+ */
+function attachmentFolderFor(candidate: string): string {
+  return joinPosix(dirname(candidate), basename(candidate, extname(candidate)));
+}
+
+/** `Notes/Hello.md` → `Notes/Hello/Hello.md`. */
+function notePathInFolder(candidate: string): string {
+  return joinPosix(attachmentFolderFor(candidate), basename(candidate));
 }
 
 /**

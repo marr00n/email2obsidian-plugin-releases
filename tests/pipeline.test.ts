@@ -208,16 +208,17 @@ describe('pipeline runSync', () => {
     expect(result.errors).toHaveLength(0);
     expect(result.synced).toBe(1);
 
-    // attachments saved
-    expect(vault.getAbstractFileByPath('Notes/doc.txt')).toBeTruthy();
-    expect(vault.getAbstractFileByPath('Notes/inline-1-0.txt')).toBeTruthy();
+    // attachments saved \u2014 alongside the note, in its own per-email folder,
+    // since this email carries attachments (the shipped default).
+    expect(vault.getAbstractFileByPath('Notes/Hi/doc.txt')).toBeTruthy();
+    expect(vault.getAbstractFileByPath('Notes/Hi/inline-1-0.txt')).toBeTruthy();
 
     // note created with frontmatter
-    const notePath = 'Notes/Hi.md';
+    const notePath = 'Notes/Hi/Hi.md';
     const text = noteText(vault, notePath);
     expect(text).toContain('title: "Hi"');
     expect(text).toContain('email2obsidianID: 1');
-    expect(text).toContain('[doc.txt](Notes/doc.txt)');
+    expect(text).toContain('[doc.txt](Notes/Hi/doc.txt)');
 
     // fetch log written
     const stored = (await plugin.loadData()) as { 'fetch-log'?: Record<string, unknown> };
@@ -914,7 +915,7 @@ describe('runSync when the service rate limits an attachment', () => {
 
     expect(result.synced).toBe(1);
     expect(result.attachmentErrors).toHaveLength(1);
-    expect(noteText(vault, 'Notes/Invoice.md')).toContain('email2obsidianID: 1');
+    expect(noteText(vault, 'Notes/Invoice/Invoice.md')).toContain('email2obsidianID: 1');
   });
 });
 
