@@ -26,6 +26,16 @@ export interface PipelineSettings {
   vaultMarkers?: string[];
   /** Whether Unmarked Email is claimed. Absent means yes, as it always was. */
   receiveUnmarked?: boolean;
+  /**
+   * Comma-separated literal prefixes, or (with `subjectPrefixIsRegex`) a
+   * regex source, stripped off the start of the subject before it becomes a
+   * filename. Mirrors the settings fields directly so this interface stays
+   * what `Email2ObsidianSettings` already is; `writeEmailNote` is the one
+   * place that turns the pair into a `SubjectPrefixConfig`.
+   */
+  subjectPrefixStrip?: string;
+  /** See `subjectPrefixStrip`. */
+  subjectPrefixIsRegex?: boolean;
 }
 
 export type { SyncMode };
@@ -157,6 +167,10 @@ export async function runSync(opts: SyncOptions): Promise<SyncResult> {
       client.downloadAttachment(id, expectedFileName),
     report,
     sleep: opts.sleep,
+    subjectPrefixStrip: {
+      value: settings.subjectPrefixStrip,
+      useRegex: settings.subjectPrefixIsRegex,
+    },
   };
 
   // Flipped by a worker the instant it hits a 429; read back by the pool

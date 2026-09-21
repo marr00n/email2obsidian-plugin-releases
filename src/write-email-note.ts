@@ -9,6 +9,7 @@ import {
 import { renderEmailMarkdown } from './helpers';
 import type { NoteNamer } from './note-namer';
 import type { SyncReport } from './sync-report';
+import { stripSubjectPrefixes, type SubjectPrefixConfig } from './subject-prefixes';
 
 /** What one email-to-note job needs from its caller. */
 export interface WriteEmailNoteContext {
@@ -27,6 +28,13 @@ export interface WriteEmailNoteContext {
    * through to `saveAttachments`. Use `silentSyncReport()` to say nothing.
    */
   report: SyncReport;
+  /**
+   * Forwarding/reply chatter ("RE:", "FWD:", ...) stripped off the start of
+   * the subject before it becomes a filename. Undefined or blank strips
+   * nothing, so an install that predates this setting names files exactly
+   * as it always did.
+   */
+  subjectPrefixStrip?: SubjectPrefixConfig;
 }
 
 export interface WriteEmailNoteResult {
@@ -84,7 +92,13 @@ export async function writeEmailNote(
   // note as data URIs in the body and are saved by the inline saver below.
   const { inline, nonInline } = partitionByInline(detail.attachments);
 
-  const notePath = await claimNotePath(vault, namer, detail);
+  // The subject as it becomes a filename only — the title in the note's own
+  // frontmatter stays `detail.subject`, untouched.
+  const namingSubject = ctx.subjectPrefixStrip
+    ? stripSubjectPrefixes(detail.subject, ctx.subjectPrefixStrip, (msg) => ctx.report.warn(msg))
+    : detail.subject;
+
+  const notePath = await claimNotePath(vault, namer, detail, namingSubject);
 
   // Phase one: the empty note. See the ordering invariant above.
   await writeOrCreateNote(vault, notePath, '');
@@ -222,10 +236,11 @@ const MAX_NAME_ATTEMPTS = 100;
 async function claimNotePath(
   vault: Vault,
   namer: NoteNamer,
-  detail: EmailDetail
+  detail: EmailDetail,
+  namingSubject: string
 ): Promise<string> {
   for (let attempt = 0; attempt < MAX_NAME_ATTEMPTS; attempt += 1) {
-    const candidate = namer.reserve(detail.subject, detail.createdAt);
+    const candidate = namer.reserve(namingSubject, detail.createdAt);
     const existing = vault.getAbstractFileByPath(candidate);
     if (!(existing instanceof TFile)) return candidate;
     if (await isOwnNote(vault, existing)) return candidate;
