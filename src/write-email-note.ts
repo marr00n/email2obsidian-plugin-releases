@@ -82,7 +82,10 @@ export async function writeEmailNote(
   // `renderEmailMarkdown` lists those same files in the Attachments section.
   // Inline attachments are not saved from this list at all — they reach the
   // note as data URIs in the body and are saved by the inline saver below.
-  const { inline, nonInline } = partitionByInline(detail.attachments);
+  const { inline, nonInline } = partitionByInline(
+    detail.attachments,
+    detail.markdownBody
+  );
 
   const notePath = await claimNotePath(vault, namer, detail);
 
@@ -256,14 +259,26 @@ async function isOwnNote(vault: Vault, file: TFile): Promise<boolean> {
   return new RegExp(`^${OWN_NOTE_PROPERTY}:`, 'm').test(frontmatter[1]);
 }
 
-function partitionByInline(attachments: AttachmentMeta[] | undefined): {
+/**
+ * An attachment is left to the body only when the body can carry it: an
+ * image, in an email whose body holds data URIs. Anything else marked inline
+ * (Apple Mail and Outlook mark PDFs this way) is downloaded like any other
+ * file, or it would never reach the vault at all.
+ */
+function partitionByInline(
+  attachments: AttachmentMeta[] | undefined,
+  markdownBody: string
+): {
   inline: AttachmentMeta[];
   nonInline: AttachmentMeta[];
 } {
+  const bodyEmbeds = markdownBody.includes('data:');
   const inline: AttachmentMeta[] = [];
   const nonInline: AttachmentMeta[] = [];
   for (const att of attachments || []) {
-    if (att.isInline) {
+    const embeddedInBody =
+      att.isInline && bodyEmbeds && att.mimeType.toLowerCase().startsWith('image/');
+    if (embeddedInBody) {
       inline.push(att);
     } else {
       nonInline.push(att);
