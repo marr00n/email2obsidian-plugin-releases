@@ -211,6 +211,45 @@ describe('writeEmailNote', () => {
     expect(text).toContain('- [doc.txt](Notes/doc.txt)');
     expect(text).not.toContain('![[Notes/doc.txt]]');
   });
+
+  // Apple Mail and Outlook mark PDFs as inline. The body never embeds a PDF,
+  // so skipping it as "already in the body" lost the file without a word.
+  it('downloads an inline attachment that is not an image', async () => {
+    const downloadCalls: number[] = [];
+    const { ctx, vault } = await makeContext({ 20: 'pdf' }, downloadCalls);
+
+    const result = await writeEmailNote(
+      ctx,
+      email({
+        markdownBody: 'Body ![](data:image/png;base64,QQ==)',
+        attachments: [
+          attachment({ id: 20, fileName: 'brief.pdf', mimeType: 'application/pdf', isInline: true }),
+        ],
+      })
+    );
+
+    expect(downloadCalls).toEqual([20]);
+    expect(vault.getAbstractFileByPath('Notes/brief.pdf')).toBeTruthy();
+    expect(noteText(vault, result.notePath)).toContain('- [brief.pdf](Notes/brief.pdf)');
+  });
+
+  it('downloads an inline image when the body embeds nothing', async () => {
+    const downloadCalls: number[] = [];
+    const { ctx, vault } = await makeContext({ 21: 'png' }, downloadCalls);
+
+    const result = await writeEmailNote(
+      ctx,
+      email({
+        markdownBody: 'Body with no embedded images',
+        attachments: [
+          attachment({ id: 21, fileName: 'photo.png', mimeType: 'image/png', isInline: true }),
+        ],
+      })
+    );
+
+    expect(downloadCalls).toEqual([21]);
+    expect(noteText(vault, result.notePath)).toContain('- [photo.png](Notes/photo.png)');
+  });
 });
 
 describe('writeEmailNote and files it did not write', () => {
