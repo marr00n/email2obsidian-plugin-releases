@@ -72,11 +72,11 @@ export const RETENTION_MS = 72 * 60 * 60 * 1000;
 /**
  * The widest UTC offset anywhere, allowed for on top of the retention window.
  *
- * The Service Client now converts an email's `createdAt` from UTC to local
- * time, so a fresh entry parses to the right instant. Entries recorded by
- * earlier versions hold the raw zoneless value, which reads as local time,
- * and a device far enough east would otherwise read a still-live email as
- * expired and never release it. Being a few hours
+ * A decline now stores the email's `createdAt` as a UTC instant (see
+ * `asInstant`), so a fresh entry parses to the right instant on any device.
+ * Entries recorded by earlier versions hold the service's zoneless UTC value,
+ * which reads as local time, and a device far enough east would otherwise
+ * read a still-live email as expired and never release it. Being a few hours
  * generous costs at worst a held-back count that is slightly optimistic;
  * being strict costs the user the email.
  */
@@ -225,7 +225,7 @@ class FetchLedger implements Ledger {
       fetchedAt: this.clock(),
       status: 'declined',
       vaultMarker: isUnmarked(vaultMarker) ? UNMARKED_KEY : vaultMarker,
-      ...(createdAt ? { createdAt } : {}),
+      ...(createdAt ? { createdAt: asInstant(createdAt) } : {}),
     });
   }
 
@@ -347,12 +347,29 @@ class FetchLedger implements Ledger {
  *
  * The window is widened by `CLOCK_SKEW_MARGIN_MS`, because entries from
  * earlier versions hold a zoneless UTC `createdAt` that reads as local time.
+ * Entries written since store it with its zone.
  * Erring late is the cheap direction here.
  */
 function isExpired(entry: LedgerEntry, now: number): boolean {
   const stamp = firstParsable(entry.createdAt, entry.fetchedAt);
   if (stamp === null) return true;
   return stamp < now - RETENTION_MS - CLOCK_SKEW_MARGIN_MS;
+}
+
+/**
+ * An email's arrival time as a UTC instant (`2026-11-13T09:15:00.000Z`).
+ *
+ * The Service Client hands it over as zoneless local time, which reads
+ * correctly only in the zone that wrote it. data.json can be synced to a
+ * device in another zone, which would read it as its own local time and
+ * misplace the email by the difference between the two zones — up to 26
+ * hours, more than `CLOCK_SKEW_MARGIN_MS` allows for. It is read here, on the
+ * device that converted it, and stored with its zone. Anything unparsable is
+ * kept as it came, for `isExpired` to treat as it always has.
+ */
+function asInstant(stamp: string): string {
+  const parsed = Date.parse(stamp);
+  return Number.isNaN(parsed) ? stamp : new Date(parsed).toISOString();
 }
 
 /** The first of these that is a date at all, or `null` if neither is. */
