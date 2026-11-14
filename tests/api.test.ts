@@ -313,6 +313,14 @@ describe('createE2oClient / getEmail', () => {
       expect(detail.sentAt).toBe(expected);
     });
 
+    it('converts an instant given with an offset rather than Z', async () => {
+      process.env.TZ = 'UTC';
+
+      const detail = await detailWith({ sentAt: '2026-11-13T10:15:00+01:00' });
+
+      expect(detail.sentAt).toBe('2026-11-13T09:15:00');
+    });
+
     it('rolls the date over when the local time crosses midnight', async () => {
       process.env.TZ = 'America/Los_Angeles';
 
@@ -346,6 +354,13 @@ describe('createE2oClient / getEmail', () => {
       ['an unparsable date', { sentAt: 'last Tuesday' }, 'sentAt'],
       ['a blank date', { sentAt: '' }, 'sentAt'],
       ['a non-string date', { sentAt: 1763025300000 }, 'sentAt'],
+      // Date.parse would read each of these as some date or other.
+      ['a weekday and a number', { sentAt: 'Tuesday 5' }, 'sentAt'],
+      ['a bare number', { sentAt: '12' }, 'sentAt'],
+      ['a bare year', { sentAt: '2026' }, 'sentAt'],
+      ['a date with no time', { sentAt: '2026-11-13' }, 'sentAt'],
+      ['a date-time with no zone', { sentAt: '2026-11-13T09:15:00' }, 'sentAt'],
+      ['an impossible date', { sentAt: '2026-13-45T09:15:00Z' }, 'sentAt'],
     ])('leaves the field out for %s', async (_label, overrides, key) => {
       const detail = await detailWith(overrides);
 

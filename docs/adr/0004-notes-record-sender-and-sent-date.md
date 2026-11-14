@@ -51,3 +51,13 @@ would have shown a non-forwarded note's `created` and `sent` hours apart for
 the same instant. The Service Client now reads it as UTC and converts it to
 local time, so the two always agree. Notes written before the change keep
 their old `created` value.
+
+Because `createdAt` is now zoneless local time, the fetch ledger no longer
+stores it as it stands: a decline records the email's arrival time as a UTC
+instant, read on the device that converted it. data.json can be synced to a
+device in another zone, which would otherwise read the value as its own local
+time and could misplace the email by more than the ledger's 14-hour margin.
+
+`sentAt` is accepted only as an ISO 8601 date-time that names its zone.
+`Date.parse` alone would turn text such as `Tuesday 5` into a made-up date,
+and would read a zoneless value as local time rather than UTC.

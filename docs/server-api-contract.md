@@ -65,7 +65,7 @@ Query params: `cursor`, `limit` (clamped 1–100, default 10), `sort`
   "sentAt": "2026-09-09T07:58:00.000Z",      // string | null, ISO 8601 UTC
   "markdownBody": "# Notes\n...",            // string, "" when the email had no HTML
   "createdAt": "2026-09-09 08:14:02",
-  "expiresAt": "2026-09-12 08:14:02",        // string, createdAt + 72h
+  "expiresAt": "2026-09-12T08:14:02.000Z",   // string, ISO 8601 UTC, ~createdAt + 72h
   "attachments": [                           // always an array, [] when none — never null
     {
       "id": 7,
@@ -168,9 +168,10 @@ List/detail 400 and 404 carry `error` and `timestamp`; the auth errors carry
 neither. Worth unifying on the server side, but any change is breaking for
 clients that key off `error`.
 
-Note that `timestamp` here, and `sentAt` on an email, are ISO 8601 while
-`createdAt`, `expiresAt` and the `createdAt` inside a cursor are SQL
-timestamps. Two time formats in one payload.
+Note that `timestamp` here, and `sentAt` and `expiresAt` on an email, are ISO
+8601 while `createdAt` and the `createdAt` inside a cursor are SQL timestamps.
+Two time formats in one payload. (`expiresAt` is written by the webhook with
+`toISOString()`, not by SQLite.)
 
 ## Retention
 
