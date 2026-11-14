@@ -31,7 +31,10 @@ mind before changing the redirect target.
       "subject": "Weekly review",            // string, never null ("(no subject)" fallback)
       "createdAt": "2026-09-09 08:14:02",    // string, SQL timestamp — not ISO
       "hashtags": ["todo", "work"],          // string[] | null
-      "vault": "Work"                        // string | null
+      "vault": "Work",                       // string | null
+      "from": "Me <me@example.com>",         // string | null — see "Sender and sent date"
+      "originalFrom": "Jane Doe <jane@example.com>", // string | null
+      "sentAt": "2026-09-09T07:58:00.000Z"   // string | null, ISO 8601 UTC
     }
   ],
   "hasMore": false,                          // boolean
@@ -57,6 +60,9 @@ Query params: `cursor`, `limit` (clamped 1–100, default 10), `sort`
   "subject": "Weekly review",
   "hashtags": ["todo"],                      // string[] | null
   "vault": null,                             // string | null
+  "from": "Me <me@example.com>",             // string | null
+  "originalFrom": "Jane Doe <jane@example.com>", // string | null
+  "sentAt": "2026-09-09T07:58:00.000Z",      // string | null, ISO 8601 UTC
   "markdownBody": "# Notes\n...",            // string, "" when the email had no HTML
   "createdAt": "2026-09-09 08:14:02",
   "expiresAt": "2026-09-12 08:14:02",        // string, createdAt + 72h
@@ -72,6 +78,30 @@ Query params: `cursor`, `limit` (clamped 1–100, default 10), `sort`
   ]
 }
 ```
+
+## Sender and sent date
+
+`from`, `originalFrom` and `sentAt` appear on both the list and the detail
+response (marr00n/Email2Obsidian-Website#31). All three are nullable, and a
+client must also cope with them being **absent**: responses from before that
+change, and a list response cached for up to 60 seconds, do not carry them.
+
+- `from` — the raw `From` header as the service received it. On a forward
+  this is the person who forwarded it, not the author.
+- `originalFrom` — the **Original Sender**: who wrote the message. Taken from
+  the forwarded block on a forward, otherwise equal to `from`. Normally
+  `Name <address>`, but extraction is best effort, so it is untrusted text of
+  any shape.
+- `sentAt` — ISO 8601 UTC (`2026-11-13T09:15:00.000Z`): the original's date
+  on a forward, otherwise the email's `Date` header. `null` when the date
+  could not be read. Unlike `createdAt` this carries a zone.
+
+`createdAt` keeps its meaning: when the email arrived at Email2Obsidian.
+
+The plugin reads `originalFrom` and `sentAt` from the detail response only,
+writes them to the note as `from` and `sent`, and leaves either property out
+when its field is null, absent or unusable (`docs/adr/0004-notes-record-sender-and-sent-date.md`).
+It never falls back to `from`. It does not read `from` at all.
 
 ## `GET /api/attachments/:id/download`
 
@@ -136,9 +166,9 @@ List/detail 400 and 404 carry `error` and `timestamp`; the auth errors carry
 neither. Worth unifying on the server side, but any change is breaking for
 clients that key off `error`.
 
-Note that `timestamp` here is ISO 8601 while `createdAt`, `expiresAt` and the
-`createdAt` inside a cursor are SQL timestamps. Two time formats in one
-payload.
+Note that `timestamp` here, and `sentAt` on an email, are ISO 8601 while
+`createdAt`, `expiresAt` and the `createdAt` inside a cursor are SQL
+timestamps. Two time formats in one payload.
 
 ## Retention
 

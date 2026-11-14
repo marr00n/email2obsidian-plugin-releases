@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import { createE2oClient, ApiError, type HttpResponse } from '../src/api';
 import { createFakeHttp, jsonResponse, textResponse, binaryResponse } from './fake-http';
@@ -228,6 +228,94 @@ describe('createE2oClient / getEmail', () => {
     const error = await client.getEmail(42).catch((e) => e);
     expect(error).toBeInstanceOf(ApiError);
     expect((error as ApiError).code).toBe('bad-response');
+  });
+
+  describe('Original Sender and sent date', () => {
+    // A zoneless date-time is read by Obsidian as local time, so the client
+    // converts the wire's UTC instant against the device's zone. Pin the zone
+    // per test so the expected values are fixed.
+    const originalTz = process.env.TZ;
+    afterEach(() => {
+      if (originalTz === undefined) delete process.env.TZ;
+      else process.env.TZ = originalTz;
+    });
+
+    async function detailWith(overrides: Record<string, unknown>) {
+      const http = createFakeHttp([detailRoute(overrides)]);
+      return createE2oClient({ apiKey: API_KEY, http }).getEmail(42);
+    }
+
+    it('carries originalFrom as originalSender and sentAt as a local timestamp', async () => {
+      process.env.TZ = 'UTC';
+
+      const detail = await detailWith({
+        from: 'Forwarder <me@example.com>',
+        originalFrom: '  Jane Doe <jane@example.com> ',
+        sentAt: '2026-11-13T09:15:00.000Z',
+      });
+
+      expect(detail.originalSender).toBe('Jane Doe <jane@example.com>');
+      expect(detail.sentAt).toBe('2026-11-13T09:15:00');
+    });
+
+    it('never takes the sender from the wire from field', async () => {
+      // On a forward `from` is the forwarder; the wrong person is worse than
+      // no person.
+      const detail = await detailWith({ from: 'Forwarder <me@example.com>', originalFrom: null });
+
+      expect(detail).not.toHaveProperty('originalSender');
+    });
+
+    it.each([
+      ['Asia/Kolkata', '2026-11-13T14:45:00'],
+      ['America/New_York', '2026-11-13T04:15:00'],
+      ['Pacific/Auckland', '2026-11-13T22:15:00'],
+    ])('converts sentAt to local time in %s', async (zone, expected) => {
+      process.env.TZ = zone;
+
+      const detail = await detailWith({ sentAt: '2026-11-13T09:15:00.000Z' });
+
+      expect(detail.sentAt).toBe(expected);
+    });
+
+    it('rolls the date over when the local time crosses midnight', async () => {
+      process.env.TZ = 'America/Los_Angeles';
+
+      const detail = await detailWith({ sentAt: '2026-01-01T03:00:59.999Z' });
+
+      expect(detail.sentAt).toBe('2025-12-31T19:00:59');
+    });
+
+    it('leaves both out when the fields are null', async () => {
+      const detail = await detailWith({ from: null, originalFrom: null, sentAt: null });
+
+      expect(detail).not.toHaveProperty('originalSender');
+      expect(detail).not.toHaveProperty('sentAt');
+    });
+
+    it('leaves both out when the fields are absent, and changes nothing else', async () => {
+      // The shape every response has until the service change is deployed.
+      const detail = await detailWith({});
+
+      expect(detail).not.toHaveProperty('originalSender');
+      expect(detail).not.toHaveProperty('sentAt');
+      expect(Object.keys(detail).sort()).toEqual(
+        ['attachments', 'createdAt', 'emailId', 'expiresAt', 'hashtags', 'id',
+          'markdownBody', 'subject', 'vaultMarker'].sort()
+      );
+    });
+
+    it.each([
+      ['a blank sender', { originalFrom: '   ' }, 'originalSender'],
+      ['a non-string sender', { originalFrom: 42 }, 'originalSender'],
+      ['an unparsable date', { sentAt: 'last Tuesday' }, 'sentAt'],
+      ['a blank date', { sentAt: '' }, 'sentAt'],
+      ['a non-string date', { sentAt: 1763025300000 }, 'sentAt'],
+    ])('leaves the field out for %s', async (_label, overrides, key) => {
+      const detail = await detailWith(overrides);
+
+      expect(detail).not.toHaveProperty(key);
+    });
   });
 });
 

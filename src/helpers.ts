@@ -145,6 +145,12 @@ export async function renderEmailMarkdown(
     // left empty for an Unmarked Email rather than omitted, so a query over
     // the property needs no null branch.
     `email2obsidianVault: ${yamlString(email.vaultMarker ?? '')}`,
+    // ADR-0004: the Original Sender and when they sent it. Unlike the Vault
+    // Marker these are omitted when unknown — an empty date property would
+    // read as a broken date, and an older service simply does not send them.
+    // The sender is untrusted text, so it is always quoted.
+    ...(email.originalSender ? [`from: ${yamlString(email.originalSender)}`] : []),
+    ...(email.sentAt ? [`sent: ${email.sentAt}`] : []),
     '---',
   ].join('\n');
 
