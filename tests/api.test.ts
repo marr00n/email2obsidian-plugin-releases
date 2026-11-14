@@ -157,13 +157,48 @@ describe('createE2oClient / getEmail', () => {
     ]);
   });
 
-  it('normalizes createdAt from SQL timestamp (space) to ISO-like (T)', async () => {
-    const http = createFakeHttp([detailRoute({ createdAt: '2026-09-09 08:14:02' })]);
-    const client = createE2oClient({ apiKey: API_KEY, http });
+  describe('createdAt', () => {
+    // The wire value is a zoneless SQL timestamp that is really UTC; the client
+    // converts it to the device's local time, as it does sentAt.
+    const originalTz = process.env.TZ;
+    afterEach(() => {
+      if (originalTz === undefined) delete process.env.TZ;
+      else process.env.TZ = originalTz;
+    });
 
-    const detail = await client.getEmail(42);
+    async function createdAtFor(wire: unknown, zone: string) {
+      process.env.TZ = zone;
+      const http = createFakeHttp([detailRoute({ createdAt: wire })]);
+      return (await createE2oClient({ apiKey: API_KEY, http }).getEmail(42)).createdAt;
+    }
 
-    expect(detail.createdAt).toBe('2026-09-09T08:14:02');
+    it.each([
+      ['UTC', '2026-09-09T08:14:02'],
+      ['Europe/London', '2026-09-09T09:14:02'],
+      ['America/New_York', '2026-09-09T04:14:02'],
+      ['Asia/Kolkata', '2026-09-09T13:44:02'],
+    ])('reads the SQL timestamp as UTC and converts it to local time in %s', async (zone, expected) => {
+      expect(await createdAtFor('2026-09-09 08:14:02', zone)).toBe(expected);
+    });
+
+    it('rolls the date back when local time is before midnight UTC', async () => {
+      expect(await createdAtFor('2026-01-01 03:00:00', 'America/Los_Angeles')).toBe('2025-12-31T19:00:00');
+    });
+
+    it('agrees with sentAt for the same instant', async () => {
+      process.env.TZ = 'Europe/Paris';
+      const http = createFakeHttp([
+        detailRoute({ createdAt: '2026-11-13 09:15:00', sentAt: '2026-11-13T09:15:00.000Z' }),
+      ]);
+      const detail = await createE2oClient({ apiKey: API_KEY, http }).getEmail(42);
+
+      expect(detail.createdAt).toBe(detail.sentAt);
+      expect(detail.createdAt).toBe('2026-11-13T10:15:00');
+    });
+
+    it('passes an unparsable value through trimmed', async () => {
+      expect(await createdAtFor('  not a date ', 'UTC')).toBe('not a date');
+    });
   });
 
   it.each([

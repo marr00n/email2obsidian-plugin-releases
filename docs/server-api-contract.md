@@ -96,7 +96,9 @@ change, and a list response cached for up to 60 seconds, do not carry them.
   on a forward, otherwise the email's `Date` header. `null` when the date
   could not be read. Unlike `createdAt` this carries a zone.
 
-`createdAt` keeps its meaning: when the email arrived at Email2Obsidian.
+`createdAt` keeps its meaning: when the email arrived at Email2Obsidian. It
+carries no zone but is UTC (SQLite `CURRENT_TIMESTAMP`); the plugin reads it as
+UTC and converts it to the device's local time.
 
 The plugin reads `originalFrom` and `sentAt` from the detail response only,
 writes them to the note as `from` and `sent`, and leaves either property out

@@ -72,9 +72,11 @@ export const RETENTION_MS = 72 * 60 * 60 * 1000;
 /**
  * The widest UTC offset anywhere, allowed for on top of the retention window.
  *
- * An email's `createdAt` arrives with no zone (`docs/server-api-contract.md`)
- * so it reads as local time, and a device far enough east would otherwise
- * read a still-live email as expired and never release it. Being a few hours
+ * The Service Client now converts an email's `createdAt` from UTC to local
+ * time, so a fresh entry parses to the right instant. Entries recorded by
+ * earlier versions hold the raw zoneless value, which reads as local time,
+ * and a device far enough east would otherwise read a still-live email as
+ * expired and never release it. Being a few hours
  * generous costs at worst a held-back count that is slightly optimistic;
  * being strict costs the user the email.
  */
@@ -343,8 +345,9 @@ class FetchLedger implements Ledger {
  * Neither stamp parsing counts as expired: it cannot be reasoned about, and
  * the alternative is an entry kept and re-hunted for ever.
  *
- * The window is widened by `CLOCK_SKEW_MARGIN_MS`, because `createdAt` has no
- * zone and reads as local time. Erring late is the cheap direction here.
+ * The window is widened by `CLOCK_SKEW_MARGIN_MS`, because entries from
+ * earlier versions hold a zoneless UTC `createdAt` that reads as local time.
+ * Erring late is the cheap direction here.
  */
 function isExpired(entry: LedgerEntry, now: number): boolean {
   const stamp = firstParsable(entry.createdAt, entry.fetchedAt);

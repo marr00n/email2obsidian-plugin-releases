@@ -16,7 +16,7 @@ sent: 2026-11-13T09:15:00
   the forward. It is always double-quoted through the same escaping as the
   subject, because it is untrusted text.
 - **`sent`** is written as `YYYY-MM-DDTHH:mm:ss`, unquoted and with no zone —
-  the shape `created` already has. Obsidian reads a zoneless date-time as
+  the same shape as `created`. Obsidian reads a zoneless date-time as
   local time, so the UTC instant from the service is converted to the
   device's zone once, in the Service Client.
 
@@ -44,6 +44,10 @@ setting for either; no other property has one.
 devices in different zones keeps whichever zone wrote the note, as any
 hand-typed date-time in Obsidian would.
 
-`created` is written from the service's zoneless SQL timestamp unconverted.
-If that timestamp is UTC, `created` and `sent` can disagree by the device's
-UTC offset. That predates this decision and is left alone here.
+`created` is converted the same way. The service's `createdAt` is a zoneless
+SQL timestamp, but it is UTC (SQLite's `CURRENT_TIMESTAMP`). It used to be
+written unconverted, which put `created` out by the device's UTC offset and
+would have shown a non-forwarded note's `created` and `sent` hours apart for
+the same instant. The Service Client now reads it as UTC and converts it to
+local time, so the two always agree. Notes written before the change keep
+their old `created` value.

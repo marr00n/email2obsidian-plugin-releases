@@ -95,9 +95,9 @@ export interface EmailDetail extends EmailSummary {
    */
   originalSender?: string;
   /**
-   * When the original message was sent, in the same zoneless shape as
-   * `createdAt` (`2026-11-13T09:15:00`) but converted to this device's local
-   * time, which is how Obsidian reads a zoneless date-time. Absent when the
+   * When the original message was sent, in the same zoneless local shape as
+   * `createdAt` (`2026-11-13T09:15:00`): both are converted from UTC to this
+   * device's local time, which is how Obsidian reads a zoneless date-time. Absent when the
    * service sent none or sent something that is not a date.
    */
   sentAt?: string;
@@ -573,15 +573,21 @@ function toAttachmentMeta(entry: unknown): AttachmentMeta | null {
 const SQL_TIMESTAMP = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d+)?)$/;
 
 /**
- * The service sends SQL timestamps (`2026-09-09 08:14:02`). Swap the space
- * for a `T` so the value parses as a date everywhere downstream; deliberately
- * no timezone suffix is added, because the wire value carries no zone.
+ * The service sends SQL timestamps (`2026-09-09 08:14:02`) with no zone, but
+ * they are UTC: SQLite's `CURRENT_TIMESTAMP` is always UTC. Obsidian reads a
+ * zoneless date-time as local time, so writing the wire value as it stands
+ * put `created` out by the device's UTC offset. Read it as UTC and convert to
+ * the same zoneless local shape `sentAt` gets, so the two always agree.
+ *
+ * A value that already carries a zone (an ISO instant) is converted the same
+ * way. Anything unparsable is passed through trimmed, as before.
  */
 function normalizeTimestamp(value: unknown): string {
   if (typeof value !== 'string') return '';
   const trimmed = value.trim();
   const matches = SQL_TIMESTAMP.exec(trimmed);
-  return matches ? `${matches[1]}T${matches[2]}` : trimmed;
+  const instant = matches ? `${matches[1]}T${matches[2]}Z` : trimmed;
+  return toLocalTimestamp(instant) ?? trimmed;
 }
 
 /**
