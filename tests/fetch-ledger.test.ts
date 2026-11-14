@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 
 import { openLedger, type LedgerData } from '../src/fetch-ledger';
 import { createReceivePolicy } from '../src/receive-policy';
@@ -574,5 +574,56 @@ describe('fetch ledger housekeeping', () => {
     // every run from now on.
     expect(ledger.pendingRelease(claimsWork).total).toBe(0);
     expect(ledger.release(claimsWork)).toBe(0);
+  });
+});
+
+describe('fetch ledger arrival times across time zones', () => {
+  // The Service Client hands the ledger `createdAt` as zoneless local time.
+  // data.json can be synced between devices, so the ledger must not store
+  // that as it stands: a device in another zone would read it as its own
+  // local time and misplace the email by the difference between the two.
+  const originalTz = process.env.TZ;
+  afterEach(() => {
+    if (originalTz === undefined) delete process.env.TZ;
+    else process.env.TZ = originalTz;
+  });
+
+  // Arrived 2026-11-13T09:15:00Z; 66 hours later the service still holds it.
+  const ARRIVED_IN_LOS_ANGELES = '2026-11-13T01:15:00';
+  const STILL_HELD = () => '2026-11-16T03:15:00.000Z';
+
+  it('stores the arrival time as a UTC instant', async () => {
+    process.env.TZ = 'America/Los_Angeles';
+    const plugin = newPlugin();
+    const ledger = await openLedger(plugin, { clock: STILL_HELD });
+
+    ledger.decline(9, 'Work', ARRIVED_IN_LOS_ANGELES);
+    await ledger.commit({ mode: 'fetch-new', cutShort: false });
+
+    expect((await storedLog(plugin))['9']?.createdAt).toBe('2026-11-13T09:15:00.000Z');
+  });
+
+  it('still offers a decline made in another zone that the service holds', async () => {
+    process.env.TZ = 'America/Los_Angeles';
+    const plugin = newPlugin();
+    const declining = await openLedger(plugin, { clock: STILL_HELD });
+    declining.decline(9, 'Work', ARRIVED_IN_LOS_ANGELES);
+    await declining.commit({ mode: 'fetch-new', cutShort: false });
+
+    // The same data.json, synced to a device in Auckland.
+    process.env.TZ = 'Pacific/Auckland';
+    const reading = await openLedger(plugin, { clock: STILL_HELD });
+
+    expect(reading.pendingRelease(claimsWork).total).toBe(1);
+  });
+
+  it('keeps an arrival time it cannot read exactly as it came', async () => {
+    const plugin = newPlugin();
+    const ledger = await openLedger(plugin, { clock });
+
+    ledger.decline(9, 'Work', 'not a date');
+    await ledger.commit({ mode: 'fetch-new', cutShort: false });
+
+    expect((await storedLog(plugin))['9']?.createdAt).toBe('not a date');
   });
 });

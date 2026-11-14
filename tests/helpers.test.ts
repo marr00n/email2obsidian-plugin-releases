@@ -185,6 +185,64 @@ describe('renderEmailMarkdown frontmatter', () => {
       email2obsidianVault: '',
     });
   });
+  describe('Original Sender and sent date', () => {
+    it('writes from and sent when both are known', async () => {
+      const props = await properties({
+        originalSender: 'Jane Doe <jane@example.com>',
+        sentAt: '2026-11-13T09:15:00',
+      });
+
+      expect(props).toMatchObject({
+        from: 'Jane Doe <jane@example.com>',
+        sent: '2026-11-13T09:15:00',
+      });
+    });
+
+    it('writes the sent date unquoted, as Obsidian expects a date-time', async () => {
+      const { markdown } = await renderEmailMarkdown(
+        { ...plain, sentAt: '2026-11-13T09:15:00' },
+        { noteFolder: 'Notes' },
+        { nonInlineAttachments: [], inlineSaver: async () => ({ filename: 'x', path: 'Notes/x' }) }
+      );
+
+      expect(markdown.split('\n')).toContain('sent: 2026-11-13T09:15:00');
+    });
+
+    it('omits both properties when neither is known', async () => {
+      const props = await properties({});
+
+      expect(props).not.toHaveProperty('from');
+      expect(props).not.toHaveProperty('sent');
+    });
+
+    it('omits only the one that is missing', async () => {
+      expect(await properties({ originalSender: 'jane@example.com' })).not.toHaveProperty('sent');
+      expect(await properties({ sentAt: '2026-11-13T09:15:00' })).not.toHaveProperty('from');
+    });
+
+    it.each([
+      ['quotes and a colon', 'Jane "JD" Doe: CEO <jane@example.com>'],
+      ['a newline and a frontmatter fence', 'Jane\n---\ntitle: hijacked'],
+      ['a fence on its own', '---'],
+      ['a hash and flow characters', '#boss [x], {y} & *z <a@b.c>'],
+      ['a backslash, tab and carriage return', 'Doe\\Jane\t\r<j@x.y>'],
+      ['a leading quote and trailing colon', "'O'Brien:"],
+    ])('keeps a sender holding %s as one intact string', async (_label, originalSender) => {
+      const props = await properties({ originalSender });
+
+      expect(props.from).toBe(originalSender);
+      // Nothing it carried escaped into a property of its own.
+      expect(props.title).toBe('Subj');
+      expect(Object.keys(props)).toEqual([
+        'title',
+        'created',
+        'tags',
+        'email2obsidianID',
+        'email2obsidianVault',
+        'from',
+      ]);
+    });
+  });
 });
 
 describe('renderEmailMarkdown attachment links', () => {

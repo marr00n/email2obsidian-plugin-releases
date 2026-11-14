@@ -86,6 +86,21 @@ export interface EmailDetail extends EmailSummary {
   markdownBody: string;
   expiresAt?: string;
   attachments: AttachmentMeta[];
+  /**
+   * The Original Sender, as the service extracted it (wire `originalFrom`):
+   * normally `Name <address>`, but untrusted text of any shape. Absent when
+   * the service sent none — not yet deployed, an older row, or extraction
+   * failed. Never filled from the wire `from`, which on a forward is the
+   * person who forwarded it.
+   */
+  originalSender?: string;
+  /**
+   * When the original message was sent, in the same zoneless local shape as
+   * `createdAt` (`2026-11-13T09:15:00`): both are converted from UTC to this
+   * device's local time, which is how Obsidian reads a zoneless date-time. Absent when the
+   * service sent none or sent something that is not a date.
+   */
+  sentAt?: string;
 }
 
 export interface EmailListRequest {
@@ -526,6 +541,14 @@ function toEmailDetail(
   if (expiresAt) {
     detail.expiresAt = expiresAt;
   }
+  const originalSender = normalizeOptionalText(payload.originalFrom);
+  if (originalSender) {
+    detail.originalSender = originalSender;
+  }
+  const sentAt = toLocalTimestamp(payload.sentAt);
+  if (sentAt) {
+    detail.sentAt = sentAt;
+  }
 
   return detail;
 }
@@ -550,15 +573,61 @@ function toAttachmentMeta(entry: unknown): AttachmentMeta | null {
 const SQL_TIMESTAMP = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d+)?)$/;
 
 /**
- * The service sends SQL timestamps (`2026-09-09 08:14:02`). Swap the space
- * for a `T` so the value parses as a date everywhere downstream; deliberately
- * no timezone suffix is added, because the wire value carries no zone.
+ * An ISO 8601 date-time that names its zone: `2026-11-13T09:15:00.000Z` or
+ * `…+01:00`. `Date.parse` alone is far too forgiving to stand guard: it reads
+ * `Tuesday 5` as 1 May 2001 and `12` as 1 December 2001, and it reads an ISO
+ * value with no zone as local time rather than UTC.
+ */
+const ISO_INSTANT =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/i;
+
+/**
+ * The service sends SQL timestamps (`2026-09-09 08:14:02`) with no zone, but
+ * they are UTC: SQLite's `CURRENT_TIMESTAMP` is always UTC. Obsidian reads a
+ * zoneless date-time as local time, so writing the wire value as it stands
+ * put `created` out by the device's UTC offset. Read it as UTC and convert to
+ * the same zoneless local shape `sentAt` gets, so the two always agree.
+ *
+ * A value that already carries a zone (an ISO instant) is converted the same
+ * way. Anything else is passed through trimmed, as before.
  */
 function normalizeTimestamp(value: unknown): string {
   if (typeof value !== 'string') return '';
   const trimmed = value.trim();
   const matches = SQL_TIMESTAMP.exec(trimmed);
-  return matches ? `${matches[1]}T${matches[2]}` : trimmed;
+  const instant = matches ? `${matches[1]}T${matches[2]}Z` : trimmed;
+  return toLocalTimestamp(instant) ?? trimmed;
+}
+
+/**
+ * An ISO 8601 instant from the wire (`2026-11-13T09:15:00.000Z`) as a
+ * zoneless local timestamp, `YYYY-MM-DDTHH:mm:ss`.
+ *
+ * Obsidian's date-time property reads a value with no zone as local time, so
+ * the conversion happens here, once, against this device's zone. Seconds are
+ * kept and milliseconds dropped, matching the shape `createdAt` is written in.
+ * Anything that is not an ISO instant with a zone (`ISO_INSTANT`) is
+ * `undefined`, never a guess.
+ */
+function toLocalTimestamp(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!ISO_INSTANT.test(trimmed)) return undefined;
+  const ms = Date.parse(trimmed);
+  if (Number.isNaN(ms)) return undefined;
+  const at = new Date(ms);
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return (
+    `${String(at.getFullYear()).padStart(4, '0')}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}` +
+    `T${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}`
+  );
+}
+
+/** Trimmed text, or `undefined` for anything that is not a non-blank string. */
+function normalizeOptionalText(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : undefined;
 }
 
 function normalizeStringArray(value: unknown): string[] {

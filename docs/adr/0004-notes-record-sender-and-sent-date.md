@@ -1,0 +1,63 @@
+# Notes record the Original Sender and sent date, and omit them when unknown
+
+Every note can carry two more properties, read from the service's
+`originalFrom` and `sentAt` fields:
+
+```yaml
+---
+created: 2026-11-13T09:20:41
+from: "Jane Doe <jane@example.com>"
+sent: 2026-11-13T09:15:00
+---
+```
+
+- **`from`** is the **Original Sender**, never the wire `from`: on a forward
+  that is the person who forwarded it, and the note is about the message, not
+  the forward. It is always double-quoted through the same escaping as the
+  subject, because it is untrusted text.
+- **`sent`** is written as `YYYY-MM-DDTHH:mm:ss`, unquoted and with no zone —
+  the same shape as `created`. Obsidian reads a zoneless date-time as
+  local time, so the UTC instant from the service is converted to the
+  device's zone once, in the Service Client.
+
+Both are **omitted** when the service sends nothing usable. There is no
+setting for either; no other property has one.
+
+## Considered Options
+
+- **Write them empty, as ADR-0003 does for `email2obsidianVault`.** Rejected.
+  An empty Vault Marker is a real answer ("arrived unmarked"); an empty sender
+  or date is not, it is "unknown". An empty `sent` would show as a blank or
+  invalid date-time, and every note written before the service sent these
+  fields — and every note written while an older service is still deployed —
+  would gain two blank properties for nothing.
+- **Fall back to the wire `from` when `originalFrom` is missing.** Rejected:
+  on a forward it names the wrong person, and a wrong sender is worse than
+  none.
+- **Write `sent` in UTC, or with its zone.** Rejected: Obsidian's date-time
+  property has no zone, so UTC would show the wrong wall-clock time, and a
+  zone suffix would make the value text rather than a date.
+
+## Consequences
+
+`sent` is local to the device that fetched the email. A vault synced between
+devices in different zones keeps whichever zone wrote the note, as any
+hand-typed date-time in Obsidian would.
+
+`created` is converted the same way. The service's `createdAt` is a zoneless
+SQL timestamp, but it is UTC (SQLite's `CURRENT_TIMESTAMP`). It used to be
+written unconverted, which put `created` out by the device's UTC offset and
+would have shown a non-forwarded note's `created` and `sent` hours apart for
+the same instant. The Service Client now reads it as UTC and converts it to
+local time, so the two always agree. Notes written before the change keep
+their old `created` value.
+
+Because `createdAt` is now zoneless local time, the fetch ledger no longer
+stores it as it stands: a decline records the email's arrival time as a UTC
+instant, read on the device that converted it. data.json can be synced to a
+device in another zone, which would otherwise read the value as its own local
+time and could misplace the email by more than the ledger's 14-hour margin.
+
+`sentAt` is accepted only as an ISO 8601 date-time that names its zone.
+`Date.parse` alone would turn text such as `Tuesday 5` into a made-up date,
+and would read a zoneless value as local time rather than UTC.

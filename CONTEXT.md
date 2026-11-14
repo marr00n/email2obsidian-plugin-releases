@@ -18,6 +18,12 @@ _Avoid_: vault tag, tag, vault name, vault ID, label
 A keyword on an email that becomes an Obsidian tag in the note's frontmatter.
 _Avoid_: tag (unqualified)
 
+**Original Sender**:
+Whoever wrote the message an email carries. On a forward it is the author of
+the forwarded message, not the person who forwarded it. Written to the note's
+`from` property, alongside `sent`, the date they sent it.
+_Avoid_: from (unqualified), forwarder, author
+
 **Unmarked Email**:
 An email that carries no Vault Marker.
 _Avoid_: untagged email, null vault, default vault
