@@ -104,6 +104,32 @@ describe('writeEmailNote', () => {
     expect(text).toContain('- [doc.txt](Notes/doc.txt)');
   });
 
+  it('strips a configured subject prefix from the filename, but not from the frontmatter title', async () => {
+    const { ctx, vault } = await makeContext();
+    const stripping: WriteEmailNoteContext = {
+      ...ctx,
+      subjectPrefixStrip: { value: 'RE:, FWD:' },
+    };
+
+    const result = await writeEmailNote(stripping, email({ subject: 'RE: Hello' }));
+
+    expect(result.notePath).toBe('Notes/Hello.md');
+    expect(noteText(vault, result.notePath)).toContain('title: "RE: Hello"');
+  });
+
+  it('strips a configured subject prefix using a regex when enabled', async () => {
+    const { ctx, vault } = await makeContext();
+    const stripping: WriteEmailNoteContext = {
+      ...ctx,
+      subjectPrefixStrip: { value: '(re|fwd)[:-]', useRegex: true },
+    };
+
+    const result = await writeEmailNote(stripping, email({ subject: 'Fwd- Hello' }));
+
+    expect(result.notePath).toBe('Notes/Hello.md');
+    expect(noteText(vault, result.notePath)).toContain('title: "Fwd- Hello"');
+  });
+
   it('creates the note before saving files, so attachment locations resolve (regression, d2961b6)', async () => {
     // The FileManager fake refuses to resolve an attachment path against a
     // source note that is not in the vault, exactly as Obsidian cannot resolve
