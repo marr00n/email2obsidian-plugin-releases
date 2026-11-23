@@ -43,11 +43,12 @@ export async function resolveNoteFolder(
 
 /**
  * Create `folder` if it doesn't already exist. A no-op for root ('' or '.').
- * Used only by `resolveNoteFolder` above — attachment saves resolve their own
- * location via `fileManager.getAvailablePathForAttachment`, which creates
- * missing folders itself, so this is only ever called for the notes folder.
+ * Used by `resolveNoteFolder` above for the notes folder, and by
+ * `write-email-note.ts` for a per-email attachment folder — attachment saves
+ * that go through `fileManager.getAvailablePathForAttachment` create missing
+ * folders themselves and never need this.
  */
-async function ensureFolder(vault: Vault, folder: string): Promise<void> {
+export async function ensureFolder(vault: Vault, folder: string): Promise<void> {
   if (!folder || isRootPath(folder)) {
     return;
   }

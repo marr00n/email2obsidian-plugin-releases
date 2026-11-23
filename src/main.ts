@@ -51,6 +51,13 @@ export interface Email2ObsidianSettings {
   vaultMarkers: string[];
   /** Whether this Obsidian Vault takes Unmarked Email. */
   receiveUnmarked: boolean;
+  /**
+   * Whether an email carrying attachments gets its own folder \u2014 the note
+   * and its files together under `notesFolder/Subject/` \u2014 rather than the
+   * note alone under `notesFolder` and its files wherever the Obsidian
+   * Vault's own attachment setting points.
+   */
+  useAttachmentFolders: boolean;
   /** What the last fetch turned away, so settings can say so between runs. */
   lastDeclined: MarkerCount[];
   /** The last fetch saw the one signature of an account without vault routing. */
@@ -79,6 +86,7 @@ const DEFAULT_SETTINGS: Email2ObsidianSettings = {
   debugLogging: false,
   vaultMarkers: [],
   receiveUnmarked: true,
+  useAttachmentFolders: true,
   lastDeclined: [],
   starterSignatureSeen: false,
 };
@@ -439,7 +447,7 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
     );
     notesFolderDesc.appendChild(document.createElement('br'));
     notesFolderDesc.append(
-      "Leave blank for vault root. Email attachments follow your vault's default settings."
+      "Leave blank for vault root. See 'Give attachments their own folder' below for where email attachments land."
     );
 
     new Setting(containerEl)
@@ -464,6 +472,18 @@ class Email2ObsidianSettingTab extends PluginSettingTab {
             },
           }
         );
+      });
+
+    new Setting(containerEl)
+      .setName('Give attachments their own folder')
+      .setDesc(
+        'When an email arrives with attachments, save the note and its attachments together in a folder named after the note, instead of your vault\u2019s default attachment location. Emails with no attachments are unaffected.'
+      )
+      .addToggle((toggle) => {
+        toggle.setValue(this.plugin.settings.useAttachmentFolders);
+        toggle.onChange(async (value) => {
+          await this.plugin.updateSettings({ useAttachmentFolders: value });
+        });
       });
 
     new Setting(containerEl)
@@ -898,6 +918,11 @@ function normalizeSettings(
     receiveUnmarked: merged.receiveUnmarked === undefined
       ? DEFAULT_SETTINGS.receiveUnmarked
       : Boolean(merged.receiveUnmarked),
+    // Absent means yes \u2014 an install upgrading into this feature gets the
+    // per-email folder unless it opts back out.
+    useAttachmentFolders: merged.useAttachmentFolders === undefined
+      ? DEFAULT_SETTINGS.useAttachmentFolders
+      : Boolean(merged.useAttachmentFolders),
     lastDeclined: normalizeMarkerCounts(merged.lastDeclined),
     starterSignatureSeen: Boolean(merged.starterSignatureSeen),
     lastRunAt:
