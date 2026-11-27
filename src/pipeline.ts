@@ -152,7 +152,6 @@ export async function runSync(opts: SyncOptions): Promise<SyncResult> {
     vault,
     fileManager: plugin.app.fileManager,
     namer,
-    noteFolder: noteFolder.path,
     downloadAttachment: (id, expectedFileName) =>
       client.downloadAttachment(id, expectedFileName),
     report,

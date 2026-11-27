@@ -97,7 +97,6 @@ describe('renderEmailMarkdown', () => {
     const savedPaths = { 1: 'Notes/saved-a.txt' } as Record<number, string>;
     const renderResult = await renderEmailMarkdown(
       email,
-      { noteFolder: 'Notes' },
       {
         nonInlineAttachments: email.attachments.filter((att) => !att.isInline),
         savedPaths,
@@ -135,7 +134,6 @@ describe('renderEmailMarkdown frontmatter', () => {
   ): Promise<Record<string, unknown>> {
     const { markdown } = await renderEmailMarkdown(
       { ...plain, ...overrides },
-      { noteFolder: 'Notes' },
       { nonInlineAttachments: [], savedPaths: {}, inlineSaver: async () => ({
         filename: 'x',
         path: 'Notes/x',
@@ -207,19 +205,20 @@ describe('renderEmailMarkdown attachment links', () => {
     ],
   });
 
-  async function attachmentLine(fileName: string, savedPath?: string): Promise<string> {
+  async function render(fileName: string, savedPath?: string): Promise<string> {
     const email = withAttachment(fileName);
-    const { markdown } = await renderEmailMarkdown(
-      email as EmailDetail,
-      { noteFolder: 'Notes' },
-      {
-        nonInlineAttachments: email.attachments,
-        savedPaths: savedPath ? { 1: savedPath } : {},
-        inlineSaver: async () => ({ filename: 'x', path: 'Notes/x' }),
-      }
-    );
-    const line = markdown.split('\n').find((row) => row.startsWith('- ['));
-    return line ?? '';
+    const { markdown } = await renderEmailMarkdown(email as EmailDetail, {
+      nonInlineAttachments: email.attachments,
+      savedPaths: savedPath ? { 1: savedPath } : {},
+      inlineSaver: async () => ({ filename: 'x', path: 'Notes/x' }),
+    });
+    return markdown;
+  }
+
+  /** The attachment's line in the Email Attachments section. */
+  async function attachmentLine(fileName: string, savedPath?: string): Promise<string> {
+    const markdown = await render(fileName, savedPath);
+    return markdown.split('\n').find((row) => row.startsWith('- ')) ?? '';
   }
 
   /**
@@ -241,33 +240,64 @@ describe('renderEmailMarkdown attachment links', () => {
     return null;
   }
 
+  /** The target as Obsidian reads it back: percent-decoded. */
+  const decoded = (line: string) => decodeURIComponent(linkTarget(line) ?? '');
+
   it('leaves an ordinary name exactly as it was', async () => {
-    expect(await attachmentLine('report.pdf')).toBe('- [report.pdf](Notes/report.pdf)');
+    expect(await attachmentLine('report.pdf', 'Notes/report.pdf')).toBe(
+      '- [report.pdf](Notes/report.pdf)'
+    );
   });
 
-  it('leaves balanced brackets alone, because they already parse', async () => {
-    const line = await attachmentLine('Invoice (final).pdf');
+  it('encodes spaces, which Reading view will not take bare in a link', async () => {
+    const line = await attachmentLine('Scan 27.11.pdf', 'Attachments/Scan 27.11.pdf');
 
-    expect(line).toBe('- [Invoice (final).pdf](Notes/Invoice (final).pdf)');
-    expect(linkTarget(line)).toBe('Notes/Invoice (final).pdf');
+    expect(line).toBe('- [Scan 27.11.pdf](Attachments/Scan%2027.11.pdf)');
+    expect(decoded(line)).toBe('Attachments/Scan 27.11.pdf');
   });
 
-  it('encodes an unmatched bracket, which would otherwise cut the link short', async () => {
-    const line = await attachmentLine('report).pdf');
+  it('keeps umlauts readable, as Obsidian does', async () => {
+    const line = await attachmentLine('Bestätigung.pdf', 'Attachments/Bestätigung.pdf');
 
-    // Bare, markdown ends the link at that `)` and the rest of the path is
-    // left as words on the page.
-    expect(linkTarget(line)).toBe('Notes/report%29.pdf');
+    expect(linkTarget(line)).toBe('Attachments/Bestätigung.pdf');
   });
 
-  it('encodes an unmatched bracket in a path the save came back with', async () => {
-    const line = await attachmentLine('report.pdf', 'Assets/odd)folder/report.pdf');
+  it('encodes a percent sign, so decoding gives the real name back', async () => {
+    const line = await attachmentLine('100% Rabatt.pdf', 'Attachments/100% Rabatt.pdf');
 
-    expect(linkTarget(line)).toBe('Assets/odd%29folder/report.pdf');
+    expect(decoded(line)).toBe('Attachments/100% Rabatt.pdf');
+  });
+
+  it('encodes # and ^, which would split the path into a note and a heading', async () => {
+    const line = await attachmentLine('a#b^c.pdf', 'Attachments/a#b^c.pdf');
+
+    expect(linkTarget(line)).toBe('Attachments/a%23b%5Ec.pdf');
+    expect(decoded(line)).toBe('Attachments/a#b^c.pdf');
+  });
+
+  it('encodes brackets, balanced or not, so none can end the link early', async () => {
+    const balanced = await attachmentLine('Invoice (final).pdf', 'Notes/Invoice (final).pdf');
+    const unmatched = await attachmentLine('report).pdf', 'Assets/odd)folder/report).pdf');
+
+    expect(decoded(balanced)).toBe('Notes/Invoice (final).pdf');
+    expect(decoded(unmatched)).toBe('Assets/odd)folder/report).pdf');
+  });
+
+  it('writes no link for a file that was not saved, so a click cannot create an empty note', async () => {
+    const line = await attachmentLine('report.pdf');
+
+    expect(line).toBe('- report.pdf (could not be downloaded)');
+  });
+
+  it('escapes markdown in the name of a file that was not saved', async () => {
+    const line = await attachmentLine('#Rechnung *neu*.pdf');
+
+    // Bare, the leading `#` became a tag and the stars emphasis.
+    expect(line).toBe('- \\#Rechnung \\*neu\\*.pdf (could not be downloaded)');
   });
 
   it('escapes square brackets in the visible half of the link', async () => {
-    const line = await attachmentLine('[draft] report.pdf');
+    const line = await attachmentLine('[draft] report.pdf', 'Notes/draft report.pdf');
 
     expect(line.startsWith('- [\\[draft\\] report.pdf]')).toBe(true);
   });

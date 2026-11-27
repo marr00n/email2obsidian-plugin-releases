@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { saveAttachments, saveBinaryData } from '../src/attachments';
+import { buildAttachmentBase, saveAttachments, saveBinaryData } from '../src/attachments';
 import { ApiError, type AttachmentMeta } from '../src/api';
 import { Vault, FileManager } from 'obsidian';
 import { silentSyncReport } from '../src/sync-report';
@@ -54,6 +54,48 @@ describe('attachments', () => {
 
     expect(result.savedPathById[101]).toBe('Global/photo.jpg');
     expect(vault.getAbstractFileByPath('Global/photo.jpg')).not.toBeNull();
+  });
+});
+
+describe('attachment file names', () => {
+  it('drops the characters that break a link to the file, as Obsidian does', () => {
+    // `#` and `^` start a heading or block reference, `|` an alias, and
+    // `[` `]` end a wikilink: a file named with any of them cannot be linked.
+    const name = buildAttachmentBase({
+      source: 'api',
+      emailId: 1,
+      index: 0,
+      suggestedName: 'Rechnung #12 [Kopie] ^a|b.pdf',
+      mimeType: 'application/pdf',
+    });
+
+    expect(name).toBe('Rechnung 12 Kopie a b.pdf');
+  });
+
+  it('falls back to a generated name when only an extension would be left', () => {
+    // `#.pdf` sanitises to `.pdf`, a dotfile Obsidian does not index.
+    for (const suggestedName of ['#.pdf', '###', '[]#^']) {
+      const name = buildAttachmentBase({
+        source: 'api',
+        emailId: 7,
+        index: 2,
+        suggestedName,
+        mimeType: 'application/pdf',
+      });
+
+      expect(name).toBe('attachment-7-2.pdf');
+    }
+  });
+
+  it('keeps spaces and umlauts', () => {
+    const name = buildAttachmentBase({
+      source: 'api',
+      emailId: 1,
+      index: 0,
+      suggestedName: 'Bestätigung März.pdf',
+    });
+
+    expect(name).toBe('Bestätigung März.pdf');
   });
 });
 

@@ -14,10 +14,8 @@ import type { SyncReport } from './sync-report';
 export interface WriteEmailNoteContext {
   vault: Vault;
   fileManager: FileManager;
-  /** Hands out the note path; already opened over `noteFolder`. */
+  /** Hands out the note path; already opened over the note folder. */
   namer: NoteNamer;
-  /** Destination folder for notes; `''` means the Obsidian Vault root. */
-  noteFolder: string;
   /** The Service Client's `downloadAttachment`; credentials live in the client. */
   downloadAttachment: DownloadAttachment;
   /** Passed to `saveAttachments` for its retry pause; injectable for tests. */
@@ -114,7 +112,7 @@ async function fillNote(
   notePath: string,
   attachments: { inline: AttachmentMeta[]; nonInline: AttachmentMeta[] }
 ): Promise<WriteEmailNoteResult> {
-  const { vault, fileManager, noteFolder, downloadAttachment, report, sleep } = ctx;
+  const { vault, fileManager, downloadAttachment, report, sleep } = ctx;
   const { inline, nonInline } = attachments;
 
   const attachmentErrors: AttachmentSaveError[] = [];
@@ -139,7 +137,6 @@ async function fillNote(
   const renderStart = Date.now();
   const renderResult = await renderEmailMarkdown(
     detail,
-    { noteFolder },
     {
       nonInlineAttachments: nonInline,
       savedPaths: savedAttachments.savedPathById,
