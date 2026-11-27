@@ -182,9 +182,11 @@ describe('writeEmailNote', () => {
 
     const text = noteText(vault, result.notePath);
     expect(vault.getAbstractFileByPath('Notes/ok.txt')).toBeTruthy();
-    // The failed download falls back to a plain folder link, and the failed
-    // inline placeholder is left in the body as it arrived.
-    expect(text).toContain('- [gone.txt](Notes/gone.txt)');
+    // The failed download is named without a link: a link to a file that
+    // does not exist makes Obsidian create an empty note when clicked. The
+    // failed inline placeholder is left in the body as it arrived.
+    expect(text).toContain('- gone.txt (could not be downloaded)');
+    expect(text).not.toContain('](Notes/gone.txt)');
     expect(text).toContain('![](data:image/png;base64,****)');
   });
 

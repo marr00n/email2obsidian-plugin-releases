@@ -278,7 +278,11 @@ async function downloadWithRetry(opts: {
 
 function sanitizeAttachmentName(name: string, id?: number): string {
   const cleaned = name
-    .replace(/[\\/:*?"<>|]+/g, ' ')
+    // Obsidian's own list of characters a file name cannot hold: the first
+    // set are illegal on some file system, and `#`, `^`, `[`, `]` and `|`
+    // break every link to the file, wikilink or markdown, so a note linking
+    // to `Rechnung #12.pdf` pointed at a note called `Rechnung ` instead.
+    .replace(/[\\/:*?"<>|#^[\]]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   if (!cleaned) {

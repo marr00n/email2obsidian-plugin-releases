@@ -148,8 +148,6 @@ export async function renderEmailMarkdown(
     '---',
   ].join('\n');
 
-  const fallbackFolder = paths.noteFolder;
-
   const shouldProcessInline =
     typeof email.markdownBody === 'string' &&
     email.markdownBody.includes('data:') &&
@@ -167,7 +165,7 @@ export async function renderEmailMarkdown(
   const nonInline = options.nonInlineAttachments;
 
   const attachmentSection = nonInline.length
-    ? buildAttachmentSection(nonInline, options.savedPaths, fallbackFolder)
+    ? buildAttachmentSection(nonInline, options.savedPaths)
     : '';
 
   const markdown = [frontmatter, '', inlineResult.body.trimEnd(), attachmentSection]
@@ -213,53 +211,48 @@ function yamlString(input: string): string {
 
 function buildAttachmentSection(
   attachments: AttachmentMeta[],
-  savedPaths: Record<number, string> | undefined,
-  fallbackFolder: string
+  savedPaths: Record<number, string> | undefined
 ): string {
   const lines = ['## Email Attachments', ''];
   for (const att of attachments) {
+    const text = escapeLinkText(att.fileName);
     const savedPath = savedPaths?.[att.id];
-    const linkPath = savedPath
-      ? normalizeLinkPath(savedPath)
-      : buildAttachmentLink(fallbackFolder, att.fileName);
-    lines.push(`- [${escapeLinkText(att.fileName)}](${escapeLinkTarget(linkPath)})`);
+    // No saved file, no link. A link to a path that holds nothing is one
+    // Obsidian answers by creating an empty note there when it is clicked,
+    // which reads to the user as the attachment having gone missing inside
+    // the vault rather than never arriving.
+    lines.push(
+      savedPath
+        ? `- [${text}](${encodeLinkTarget(normalizeLinkPath(savedPath))})`
+        : `- ${text} (could not be downloaded)`
+    );
   }
   return lines.join('\n');
 }
 
 /**
- * A markdown link target, with the brackets that would end it early made
- * safe.
+ * A markdown link target that Obsidian reads back as the path it was given.
  *
- * Markdown closes `(...)` on the first unmatched `)`, so an attachment named
- * `report).pdf` cut its own link short and left the rest of the path as plain
- * text on the page. Balanced pairs — `Invoice (final).pdf` — parse correctly
- * and are left alone, so ordinary filenames read as they always have; only
- * the brackets that would break the link are encoded.
+ * Obsidian percent-decodes a markdown link's target, and its own links are
+ * written that way: `Scan%2027.11.pdf`, never a bare space. A bare space is
+ * accepted by the Live Preview parser but not by Reading view's, so the same
+ * link worked in one mode and was plain text in the other; a bare `%` was
+ * decoded into a different name; and `#` or `^` split the path into a note
+ * and a heading or block, so clicking it created a new, empty note named
+ * after the part before it. Each of those is encoded, as are brackets, which
+ * would otherwise end the target early.
  */
-function escapeLinkTarget(path: string): string {
-  return isBracketBalanced(path)
-    ? path
-    : path.replace(/\(/g, '%28').replace(/\)/g, '%29');
+function encodeLinkTarget(path: string): string {
+  // encodeURIComponent leaves `(` and `)` alone, so those are done by hand.
+  return path
+    .replace(/[%\s#^<>]/g, (char) => encodeURIComponent(char))
+    .replace(/\(/g, '%28')
+    .replace(/\)/g, '%29');
 }
 
 /** The visible half of the link: `[` and `]` would end it early too. */
 function escapeLinkText(text: string): string {
   return text.replace(/([[\]])/g, '\\$1');
-}
-
-function isBracketBalanced(text: string): boolean {
-  let depth = 0;
-  for (const char of text) {
-    if (char === '(') depth += 1;
-    else if (char === ')' && --depth < 0) return false;
-  }
-  return depth === 0;
-}
-
-function buildAttachmentLink(folder: string, filename: string): string {
-  const cleanFolder = folder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
-  return cleanFolder ? `${cleanFolder}/${filename}` : filename;
 }
 
 function normalizeLinkPath(path: string): string {
