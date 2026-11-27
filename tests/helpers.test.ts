@@ -41,6 +41,37 @@ describe('processInlinePlaceholders', () => {
     expect(result.inlineEmbeds[0]).toBe('Assets/alt.png');
   });
 
+  describe('folders with characters a wikilink cannot hold', () => {
+    const inFolder = (folder: string) =>
+      vi.fn(async (opts: any) => ({
+        filename: opts.suggestedName,
+        path: `${folder}/${opts.suggestedName}`,
+      }));
+    const email = {
+      ...emailBase,
+      markdownBody: '![pic](data:image/png;base64,QUJD)',
+    };
+
+    it.each(['Mail #2', 'Mail ^2', 'Mail [2', 'Mail 2]', 'A|B'])(
+      'embeds the file in %s with an encoded markdown link',
+      async (folder) => {
+        const result = await processInlinePlaceholders(email, inFolder(folder) as any);
+
+        expect(result.errors).toHaveLength(0);
+        expect(result.body).not.toContain('![[');
+        const match = result.body.match(/^!\[\]\(([^()\s]+)\)$/);
+        expect(match).not.toBeNull();
+        expect(match![1]).not.toMatch(/[#^[\]|]/);
+        expect(decodeURIComponent(match![1])).toBe(`${folder}/pic.png`);
+      }
+    );
+
+    it('keeps the wikilink form for an ordinary folder', async () => {
+      const result = await processInlinePlaceholders(email, inFolder('Mail 2') as any);
+      expect(result.body).toBe('![[Mail 2/pic.png]]');
+    });
+  });
+
   it('rejects non-base64 URIs and preserves placeholder', async () => {
     const email = {
       ...emailBase,

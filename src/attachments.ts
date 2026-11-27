@@ -283,8 +283,9 @@ function sanitizeAttachmentName(name: string, emptyName = 'attachment'): string 
   const cleaned = name
     // Obsidian's own list of characters a file name cannot hold. Most are
     // illegal on some file system; `#`, `^`, `[` and `]` (and `|`) break a
-    // wikilink to the file, as the inline `![[…]]` embeds are, so an image
-    // named `Rechnung #12.png` was embedded as a note called `Rechnung `.
+    // wikilink to the file, as the inline `![[…]]` embeds usually are, so an
+    // image named `Rechnung #12.png` was embedded as a note called `Rechnung `.
+    // The folder can still hold them; `embedLink` in helpers.ts covers that.
     .replace(/[\\/:*?"<>|#^[\]]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();

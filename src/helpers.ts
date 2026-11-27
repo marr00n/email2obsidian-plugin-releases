@@ -102,7 +102,7 @@ export async function processInlinePlaceholders(
       });
 
       inlineEmbeds[placeholderIndex] = saved.path;
-      output += `![[${normalizeLinkPath(saved.path)}]]`;
+      output += embedLink(saved.path);
     } catch (error) {
       errors.push(toAttachmentSaveError(context, error));
       output += match[0];
@@ -234,13 +234,14 @@ function buildAttachmentSection(
  * link worked in one mode and was plain text in the other; a bare `%` was
  * decoded into a different name; and `#` or `^` split the path into a note
  * and a heading or block, so clicking it created a new, empty note named
- * after the part before it. Each of those is encoded, as are brackets, which
- * would otherwise end the target early.
+ * after the part before it. Each of those is encoded, and so are brackets
+ * and `|`, so the same target also serves the embeds a wikilink cannot hold
+ * (see `embedLink`).
  */
 function encodeLinkTarget(path: string): string {
   // encodeURIComponent leaves `(` and `)` alone, so those are done by hand.
   return path
-    .replace(/[%\s#^<>]/g, (char) => encodeURIComponent(char))
+    .replace(/[%\s#^<>[\]|]/g, (char) => encodeURIComponent(char))
     .replace(/\(/g, '%28')
     .replace(/\)/g, '%29');
 }
@@ -257,6 +258,27 @@ function escapePlainName(text: string): string {
 /** The visible half of the link: `[` and `]` would end it early too. */
 function escapeLinkText(text: string): string {
   return text.replace(/([[\]])/g, '\\$1');
+}
+
+/**
+ * Characters a wikilink gives a meaning to, with no way to escape them: `#`
+ * and `^` start a heading or block reference, `|` starts the display text,
+ * and brackets end the link. Saved file names never contain them
+ * (`sanitizeAttachmentName` in attachments.ts strips them), but the
+ * attachment folder the user chose can.
+ */
+const WIKILINK_UNSAFE = /[#^[\]|]/;
+
+/**
+ * An embed of the saved file. The wikilink form is kept wherever it can
+ * reach the file, so notes look as they always have; a path it cannot
+ * reach falls back to a markdown embed with an encoded target.
+ */
+function embedLink(path: string): string {
+  const target = normalizeLinkPath(path);
+  return WIKILINK_UNSAFE.test(target)
+    ? `![](${encodeLinkTarget(target)})`
+    : `![[${target}]]`;
 }
 
 function normalizeLinkPath(path: string): string {
