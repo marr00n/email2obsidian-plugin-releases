@@ -72,6 +72,21 @@ describe('attachment file names', () => {
     expect(name).toBe('Rechnung 12 Kopie a b.pdf');
   });
 
+  it('falls back to a generated name when only an extension would be left', () => {
+    // `#.pdf` sanitises to `.pdf`, a dotfile Obsidian does not index.
+    for (const suggestedName of ['#.pdf', '###', '[]#^']) {
+      const name = buildAttachmentBase({
+        source: 'api',
+        emailId: 7,
+        index: 2,
+        suggestedName,
+        mimeType: 'application/pdf',
+      });
+
+      expect(name).toBe('attachment-7-2.pdf');
+    }
+  });
+
   it('keeps spaces and umlauts', () => {
     const name = buildAttachmentBase({
       source: 'api',

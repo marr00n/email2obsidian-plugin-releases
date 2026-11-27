@@ -69,8 +69,11 @@ export function buildAttachmentBase(opts: {
   const fallback = `${fallbackPrefix}-${emailId}-${index}`;
   const mimeExt = getExtensionForMime(mimeType);
 
-  if (suggestedName && suggestedName.trim().length) {
-    const sanitized = sanitizeAttachmentName(suggestedName);
+  const sanitized = suggestedName ? sanitizeAttachmentName(suggestedName, '') : '';
+  // A name that sanitises down to nothing but an extension (`#.pdf` becomes
+  // `.pdf`) would be saved as a dotfile, which Obsidian does not index, so a
+  // link to it opens an empty note. Such a name falls back like a missing one.
+  if (sanitized && !sanitized.startsWith('.')) {
     const ext = extname(sanitized);
     if (ext && ext.length) {
       return sanitized;
@@ -276,18 +279,16 @@ async function downloadWithRetry(opts: {
   }
 }
 
-function sanitizeAttachmentName(name: string, id?: number): string {
+function sanitizeAttachmentName(name: string, emptyName = 'attachment'): string {
   const cleaned = name
-    // Obsidian's own list of characters a file name cannot hold: the first
-    // set are illegal on some file system, and `#`, `^`, `[`, `]` and `|`
-    // break every link to the file, wikilink or markdown, so a note linking
-    // to `Rechnung #12.pdf` pointed at a note called `Rechnung ` instead.
+    // Obsidian's own list of characters a file name cannot hold. Most are
+    // illegal on some file system; `#`, `^`, `[` and `]` (and `|`) break a
+    // wikilink to the file, as the inline `![[…]]` embeds are, so an image
+    // named `Rechnung #12.png` was embedded as a note called `Rechnung `.
     .replace(/[\\/:*?"<>|#^[\]]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  if (!cleaned) {
-    return typeof id === 'number' ? `attachment-${id}` : 'attachment';
-  }
+  if (!cleaned) return emptyName;
   const ext = extname(cleaned);
   const base = basename(cleaned, ext);
   return `${base}${ext}`;

@@ -97,7 +97,6 @@ describe('renderEmailMarkdown', () => {
     const savedPaths = { 1: 'Notes/saved-a.txt' } as Record<number, string>;
     const renderResult = await renderEmailMarkdown(
       email,
-      { noteFolder: 'Notes' },
       {
         nonInlineAttachments: email.attachments.filter((att) => !att.isInline),
         savedPaths,
@@ -135,7 +134,6 @@ describe('renderEmailMarkdown frontmatter', () => {
   ): Promise<Record<string, unknown>> {
     const { markdown } = await renderEmailMarkdown(
       { ...plain, ...overrides },
-      { noteFolder: 'Notes' },
       { nonInlineAttachments: [], savedPaths: {}, inlineSaver: async () => ({
         filename: 'x',
         path: 'Notes/x',
@@ -207,36 +205,20 @@ describe('renderEmailMarkdown attachment links', () => {
     ],
   });
 
-  async function renderWithout(fileName: string): Promise<string> {
+  async function render(fileName: string, savedPath?: string): Promise<string> {
     const email = withAttachment(fileName);
-    const { markdown } = await renderEmailMarkdown(
-      email as EmailDetail,
-      { noteFolder: 'Notes' },
-      {
-        nonInlineAttachments: email.attachments,
-        savedPaths: {},
-        inlineSaver: async () => ({ filename: 'x', path: 'Notes/x' }),
-      }
-    );
+    const { markdown } = await renderEmailMarkdown(email as EmailDetail, {
+      nonInlineAttachments: email.attachments,
+      savedPaths: savedPath ? { 1: savedPath } : {},
+      inlineSaver: async () => ({ filename: 'x', path: 'Notes/x' }),
+    });
     return markdown;
   }
 
-  const markdownLine = (markdown: string) =>
-    markdown.split('\n').find((row) => row.startsWith('- ')) ?? '';
-
+  /** The attachment's line in the Email Attachments section. */
   async function attachmentLine(fileName: string, savedPath?: string): Promise<string> {
-    const email = withAttachment(fileName);
-    const { markdown } = await renderEmailMarkdown(
-      email as EmailDetail,
-      { noteFolder: 'Notes' },
-      {
-        nonInlineAttachments: email.attachments,
-        savedPaths: savedPath ? { 1: savedPath } : {},
-        inlineSaver: async () => ({ filename: 'x', path: 'Notes/x' }),
-      }
-    );
-    const line = markdown.split('\n').find((row) => row.startsWith('- ['));
-    return line ?? '';
+    const markdown = await render(fileName, savedPath);
+    return markdown.split('\n').find((row) => row.startsWith('- ')) ?? '';
   }
 
   /**
@@ -302,9 +284,16 @@ describe('renderEmailMarkdown attachment links', () => {
   });
 
   it('writes no link for a file that was not saved, so a click cannot create an empty note', async () => {
-    const line = markdownLine(await renderWithout('report.pdf'));
+    const line = await attachmentLine('report.pdf');
 
     expect(line).toBe('- report.pdf (could not be downloaded)');
+  });
+
+  it('escapes markdown in the name of a file that was not saved', async () => {
+    const line = await attachmentLine('#Rechnung *neu*.pdf');
+
+    // Bare, the leading `#` became a tag and the stars emphasis.
+    expect(line).toBe('- \\#Rechnung \\*neu\\*.pdf (could not be downloaded)');
   });
 
   it('escapes square brackets in the visible half of the link', async () => {

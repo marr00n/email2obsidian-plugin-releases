@@ -53,7 +53,6 @@ async function makeContext(
     vault,
     fileManager: plugin.app.fileManager,
     namer: await openNoteNames(vault, NOTE_FOLDER),
-    noteFolder: NOTE_FOLDER,
     downloadAttachment: async (id, expectedFileName) => {
       downloadCalls.push(id);
       const body = downloaded[id];

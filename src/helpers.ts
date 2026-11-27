@@ -15,10 +15,6 @@ export type InlineBinarySaver = (opts: {
   mimeType?: string | null;
 }) => Promise<{ filename: string; path: string }>;
 
-export interface RenderPaths {
-  noteFolder: string;
-}
-
 export interface RenderedMarkdown {
   markdown: string;
   inlineEmbeds: Record<number, string>;
@@ -128,7 +124,6 @@ export async function processInlinePlaceholders(
  */
 export async function renderEmailMarkdown(
   email: EmailDetail,
-  paths: RenderPaths,
   options: RenderMarkdownOptions
 ): Promise<RenderedMarkdown> {
   const tags = Array.from(new Set([...email.hashtags, 'email2obsidian']));
@@ -224,7 +219,7 @@ function buildAttachmentSection(
     lines.push(
       savedPath
         ? `- [${text}](${encodeLinkTarget(normalizeLinkPath(savedPath))})`
-        : `- ${text} (could not be downloaded)`
+        : `- ${escapePlainName(att.fileName)} (could not be downloaded)`
     );
   }
   return lines.join('\n');
@@ -248,6 +243,15 @@ function encodeLinkTarget(path: string): string {
     .replace(/[%\s#^<>]/g, (char) => encodeURIComponent(char))
     .replace(/\(/g, '%28')
     .replace(/\)/g, '%29');
+}
+
+/**
+ * A file name written as plain text, not a link. Markdown punctuation in it is
+ * escaped so the name reads as typed: a leading `#` would otherwise become a
+ * tag, `*` or `_` emphasis, and `<b>` an HTML tag.
+ */
+function escapePlainName(text: string): string {
+  return text.replace(/([\\`*_[\]<>#|~])/g, '\\$1');
 }
 
 /** The visible half of the link: `[` and `]` would end it early too. */
